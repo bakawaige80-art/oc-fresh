@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: origincheck
+    env: node
+    buildCommand: "npm install && cd client && npm install && npm run build"
+    startCommand: "node server.js"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: APP_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_NAME
+        sync: false
+      - key: COPYLEAKS_EMAIL
+        sync: false
+      - key: COPYLEAKS_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FROM_EMAIL
+        sync: false
+      - key: NODE_ENV
+        value: production
