@@ -12,6 +12,27 @@ const { v4: uuidv4 } = require('uuid');
 const crypto      = require('crypto');
 const { Pool }    = require('pg');
 const PDFDocument = require('pdfkit');
+
+// ── Arabic text helpers ───────────────────────────────────
+// Detect if text contains Arabic characters
+function hasArabic(text) {
+  return /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/.test(text);
+}
+
+// Reverse Arabic text for RTL rendering in PDFKit
+// PDFKit doesn't support RTL natively, so we reverse the string
+function prepareArabic(text) {
+  if (!hasArabic(text)) return text;
+  // Simple reversal for RTL — works for most Arabic text in certificates
+  return text.split('').reverse().join('');
+}
+
+// Font paths
+const FONT_DIR      = path.join(__dirname, 'fonts');
+const FONT_REGULAR  = path.join(FONT_DIR, 'Amiri-Regular.ttf');
+const FONT_BOLD     = path.join(FONT_DIR, 'Amiri-Bold.ttf');
+const FONT_ITALIC   = path.join(FONT_DIR, 'Amiri-Italic.ttf');
+const ARABIC_FONTS_AVAILABLE = fs.existsSync(FONT_REGULAR);
 const QRCode      = require('qrcode');
 const fs          = require('fs');
 const { Resend }  = require('resend');
@@ -1185,6 +1206,18 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
       doc.on('end', () => resolve(Buffer.concat(bufs)));
       doc.on('error', reject);
 
+      // Register Arabic fonts if available
+      if (ARABIC_FONTS_AVAILABLE) {
+        doc.registerFont('Amiri',        FONT_REGULAR);
+        doc.registerFont('Amiri-Bold',   FONT_BOLD);
+        doc.registerFont('Amiri-Italic', FONT_ITALIC);
+      }
+
+      // Helper: pick correct font based on text content
+      const fontRegular = (text) => ARABIC_FONTS_AVAILABLE && hasArabic(text) ? 'Amiri'        : 'Helvetica';
+      const fontBold    = (text) => ARABIC_FONTS_AVAILABLE && hasArabic(text) ? 'Amiri-Bold'   : 'Helvetica-Bold';
+      const fontItalic  = (text) => ARABIC_FONTS_AVAILABLE && hasArabic(text) ? 'Amiri-Italic' : 'Helvetica-BoldOblique';
+
       const W = doc.page.width;
       const H = doc.page.height;
       const pct = chk.similarity;
@@ -1286,7 +1319,7 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
       let curY = zoneTop + 4;
 
       // Institution
-      doc.fillColor(TEAL).font('Helvetica-Bold').fontSize(15)
+      doc.fillColor(TEAL).font(fontBold(displayInstitution)).fontSize(15)
          .text(displayInstitution, contentX, curY, { width: contentW });
       const instLines = Math.ceil(displayInstitution.length / 52);
       curY += instLines * 19;
@@ -1296,8 +1329,9 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
 
       // Author
       curY += 7;
-      doc.fillColor(INK).font('Helvetica-BoldOblique').fontSize(30)
-         .text(user.name || 'Unknown Author', contentX, curY, { width: contentW });
+      const authorName = user.name || 'Unknown Author';
+      doc.fillColor(INK).font(fontItalic(authorName)).fontSize(30)
+         .text(authorName, contentX, curY, { width: contentW });
       curY += 42;
 
       // Title
@@ -1305,9 +1339,11 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
          .text('PAPER TITLE', contentX, curY, { characterSpacing: 1.5 });
       curY += 11;
       // Full title — no truncation, wraps naturally
+      // Arabic text: don't uppercase (Arabic has no uppercase)
+      const titleDisplay = hasArabic(cleanTitle) ? cleanTitle : cleanTitle.toUpperCase();
       const titleLineCount = Math.ceil(cleanTitle.length / 60);
-      doc.fillColor(INK).font('Helvetica-Bold').fontSize(9)
-         .text(cleanTitle.toUpperCase(), contentX, curY, { width: contentW, lineGap: 3 });
+      doc.fillColor(INK).font(fontBold(cleanTitle)).fontSize(9)
+         .text(titleDisplay, contentX, curY, { width: contentW, lineGap: 3 });
       curY += Math.max(titleLineCount * 13, 14) + 10;
 
       // Pills
@@ -1344,7 +1380,7 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
         doc.fillColor(TEAL).font('Helvetica-Bold').fontSize(8)
            .text('AI ANALYSIS VERDICT', contentX + 12, verdictY + 10, { characterSpacing: 1.2 });
         // Bold, 14pt, stands out
-        doc.fillColor('#1a2a3a').font('Helvetica-Bold').fontSize(12)
+        doc.fillColor('#1a2a3a').font(fontBold(verdictText)).fontSize(12)
            .text(verdictText, contentX + 12, verdictY + 24,
                  { width: panelX - contentX - 24, lineGap: 4 });
       }
