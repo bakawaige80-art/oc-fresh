@@ -35,7 +35,7 @@ const FONT_ITALIC   = path.join(FONT_DIR, 'Amiri-Italic.ttf');
 const ARABIC_FONTS_AVAILABLE = fs.existsSync(FONT_REGULAR);
 const QRCode      = require('qrcode');
 const fs          = require('fs');
-const { Resend }  = require('resend');
+// Resend uses direct HTTP API - no npm package needed
 
 // ── Config ────────────────────────────────────────────────
 const PORT        = process.env.PORT || 3001;
@@ -50,17 +50,26 @@ const FROM_EMAIL  = process.env.FROM_EMAIL || 'noreply@origincheck.ng';
 const COPYLEAKS_EMAIL = process.env.COPYLEAKS_EMAIL || '';
 const COPYLEAKS_KEY   = process.env.COPYLEAKS_API_KEY || '';
 
-// Resend email client
-let resendClient = null;
-function getResend() {
-  if (!resendClient && RESEND_KEY) {
-    try {
-      resendClient = new Resend(RESEND_KEY);
-    } catch(e) {
-      console.error('Resend init error:', e.message);
-    }
-  }
-  return resendClient;
+// Send email via Resend HTTP API (no npm package needed)
+async function sendEmail({ to, subject, html, text }) {
+  if (!RESEND_KEY) throw new Error('RESEND_API_KEY not configured.');
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RESEND_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: `${ADMIN_NAME} <${FROM_EMAIL}>`,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      text,
+    }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.message || data.name || 'Email send failed');
+  return data;
 }
 
 // ── Plans ─────────────────────────────────────────────────
@@ -1656,8 +1665,7 @@ app.post('/api/admin/email-send', auth, async (req, res) => {
   const { segment, subject, body, personalise } = req.body;
   if (!subject || !body) return res.status(400).json({ error: 'Subject and body are required.' });
 
-  const rs = getResend();
-  if (!rs) return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY to your environment variables.' });
+  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY to your environment variables.' });
 
   try {
     // Get target users
@@ -1689,13 +1697,7 @@ app.post('/api/admin/email-send', auth, async (req, res) => {
             ? `Dear ${user.name},\n\n${body}\n\nOriginCheck Team`
             : body + '\n\nOriginCheck Team';
 
-          await rs.emails.send({
-            from: `${ADMIN_NAME} <${FROM_EMAIL}>`,
-            to: user.email,
-            subject,
-            html,
-            text: textBody,
-          });
+          await sendEmail({ to: user.email, subject, html, text: textBody });
           sent++;
         } catch(e) {
           failed++;
@@ -1729,13 +1731,11 @@ app.post('/api/admin/email-test', auth, async (req, res) => {
   if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
 
   const { subject, body } = req.body;
-  const rs = getResend();
-  if (!rs) return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY.' });
+  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY.' });
 
   try {
     const html = buildEmailHTML(subject || 'Test Email', body || 'This is a test email from OriginCheck admin.', 'Admin');
-    await rs.emails.send({
-      from: `${ADMIN_NAME} <${FROM_EMAIL}>`,
+    await sendEmail({
       to: ADMIN_EMAIL,
       subject: '[TEST] ' + (subject || 'Test Email'),
       html,
