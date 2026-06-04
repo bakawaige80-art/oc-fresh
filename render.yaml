@@ -12,7 +12,7 @@ services:
       - key: PAYSTACK_SECRET_KEY
         sync: false
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: APP_URL
         sync: false
       - key: ADMIN_EMAIL
