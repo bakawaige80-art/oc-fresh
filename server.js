@@ -12,19 +12,13 @@ const { v4: uuidv4 } = require('uuid');
 const crypto      = require('crypto');
 const { Pool }    = require('pg');
 const PDFDocument = require('pdfkit');
+const QRCode      = require('qrcode');
+const fs          = require('fs');
+// Resend uses direct HTTP API - no npm package needed
 
 // ── Arabic text helpers ───────────────────────────────────
-// Detect if text contains Arabic characters
 function hasArabic(text) {
-  return /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/.test(text);
-}
-
-// Reverse Arabic text for RTL rendering in PDFKit
-// PDFKit doesn't support RTL natively, so we reverse the string
-function prepareArabic(text) {
-  if (!hasArabic(text)) return text;
-  // Simple reversal for RTL — works for most Arabic text in certificates
-  return text.split('').reverse().join('');
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
 }
 
 // Font paths
@@ -33,9 +27,6 @@ const FONT_REGULAR  = path.join(FONT_DIR, 'Amiri-Regular.ttf');
 const FONT_BOLD     = path.join(FONT_DIR, 'Amiri-Bold.ttf');
 const FONT_ITALIC   = path.join(FONT_DIR, 'Amiri-Italic.ttf');
 const ARABIC_FONTS_AVAILABLE = fs.existsSync(FONT_REGULAR);
-const QRCode      = require('qrcode');
-const fs          = require('fs');
-// Resend uses direct HTTP API - no npm package needed
 
 // ── Config ────────────────────────────────────────────────
 const PORT        = process.env.PORT || 3001;
