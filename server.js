@@ -38,8 +38,7 @@ const PAYSTACK_KEY  = process.env.PAYSTACK_SECRET_KEY || '';
 const APP_URL     = process.env.APP_URL || 'http://localhost:3001';
 const RESEND_KEY  = process.env.RESEND_API_KEY || '';
 const FROM_EMAIL  = process.env.FROM_EMAIL || 'noreply@origincheck.ng';
-const COPYLEAKS_EMAIL = process.env.COPYLEAKS_EMAIL || '';
-const COPYLEAKS_KEY   = process.env.COPYLEAKS_API_KEY || '';
+const GPTZERO_KEY     = process.env.GPTZERO_API_KEY || '';
 
 // Send email via Resend HTTP API (no npm package needed)
 async function sendEmail({ to, subject, html, text }) {
@@ -65,10 +64,11 @@ async function sendEmail({ to, subject, html, text }) {
 
 // ── Plans ─────────────────────────────────────────────────
 const PLANS = {
-  free:       { name: 'Free',       naira: 0,     price: 0,       checks: 1,     copyleaks: 0  },
-  basic:      { name: 'Basic',      naira: 3500,  price: 350000,  checks: 30,    copyleaks: 2  },
-  researcher: { name: 'Pro',        naira: 10000, price: 1000000, checks: 100,   copyleaks: 5  },
-  university: { name: 'University', naira: 25000, price: 2500000, checks: 99999, copyleaks: 15 },
+  // gptzeroWords = max words per check using GPTZero deep scan (currently dormant feature)
+  free:       { name: 'Free',       naira: 0,     price: 0,       checks: 1,     gptzeroWords: 0,    gptzeroChecks: 0  },
+  basic:      { name: 'Basic',      naira: 3500,  price: 350000,  checks: 30,    gptzeroWords: 500,  gptzeroChecks: 5  },
+  researcher: { name: 'Pro',        naira: 10000, price: 1000000, checks: 100,   gptzeroWords: 1000, gptzeroChecks: 20 },
+  university: { name: 'University', naira: 25000, price: 2500000, checks: 99999, gptzeroWords: 2000, gptzeroChecks: 50 },
 };
 
 // Affiliate commission rates (percentage of payment)
@@ -105,11 +105,15 @@ async function initDB() {
       checks_limit INTEGER DEFAULT 0,
       copyleaks_used INTEGER DEFAULT 0,
       copyleaks_limit INTEGER DEFAULT 0,
+      gptzero_used INTEGER DEFAULT 0,
+      gptzero_limit INTEGER DEFAULT 0,
       sub_expires TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     ALTER TABLE users ADD COLUMN IF NOT EXISTS copyleaks_used INTEGER DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS copyleaks_limit INTEGER DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS gptzero_used INTEGER DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS gptzero_limit INTEGER DEFAULT 0;
     CREATE TABLE IF NOT EXISTS checks (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -168,6 +172,28 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT;
+
+    -- Ambassador programme table
+    CREATE TABLE IF NOT EXISTS ambassadors (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      institution TEXT NOT NULL,
+      role TEXT NOT NULL,
+      whatsapp TEXT,
+      motivation TEXT,
+      status TEXT DEFAULT 'pending',
+      referrals_this_month INTEGER DEFAULT 0,
+      total_referrals INTEGER DEFAULT 0,
+      activated_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ambassadors_user   ON ambassadors(user_id);
+    CREATE INDEX IF NOT EXISTS idx_ambassadors_status ON ambassadors(status);
+    ALTER TABLE ambassadors ADD COLUMN IF NOT EXISTS referrals_this_month INTEGER DEFAULT 0;
+    ALTER TABLE ambassadors ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0;
+
     CREATE INDEX IF NOT EXISTS idx_users_email    ON users(email);
     CREATE INDEX IF NOT EXISTS idx_checks_user    ON checks(user_id);
     CREATE INDEX IF NOT EXISTS idx_payments_user  ON payments(user_id);
@@ -233,7 +259,7 @@ function auth(req, res, next) {
 }
 
 async function safeUser(id) {
-  const u = await db.get('SELECT id,name,email,institution,plan,checks_used,checks_limit,copyleaks_used,copyleaks_limit,sub_expires,created_at FROM users WHERE id=$1', [id]);
+  const u = await db.get('SELECT id,name,email,institution,plan,checks_used,checks_limit,gptzero_used,gptzero_limit,sub_expires,created_at FROM users WHERE id=$1', [id]);
   if (u) {
     u.is_admin = (u.email === ADMIN_EMAIL);
     const aff = await db.get('SELECT id,code,total_referrals,total_earnings,pending_earnings,paid_earnings FROM affiliates WHERE user_id=$1', [id]);
@@ -358,8 +384,8 @@ async function verifyPaystack(reference) {
     const pl = PLANS[plan];
     if (!pl || !user_id) return false;
     const exp = new Date(); exp.setDate(exp.getDate() + 30);
-    await db.run('UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,copyleaks_limit=$3,copyleaks_used=0,sub_expires=$4 WHERE id=$5',
-      [plan, pl.checks, pl.copyleaks || 0, exp.toISOString(), user_id]);
+    await db.run('UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,gptzero_limit=$3,gptzero_used=0,sub_expires=$4 WHERE id=$5',
+      [plan, pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), user_id]);
     await db.run('UPDATE payments SET status=$1,paystack_id=$2 WHERE reference=$3',
       ['success', String(data.data.id), reference]);
 
@@ -410,454 +436,92 @@ app.post('/api/extract', auth, upload.single('file'), async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: 'File extraction failed.' }); }
 });
 
-// ── COPYLEAKS HELPERS ──────────────────────────────────────
+// ── GPTZERO HELPER ────────────────────────────────────────
+async function runGPTZero(text) {
+  if (!GPTZERO_KEY) throw new Error('GPTZero not configured.');
 
-// Token cache — Copyleaks tokens last 48 hours
-let copyleaksToken = null;
-let copyleaksTokenExpiry = null;
-
-async function getCopyleaksToken() {
-  // Return cached token if still valid (with 1 hour buffer)
-  if (copyleaksToken && copyleaksTokenExpiry && new Date() < new Date(copyleaksTokenExpiry - 3600000)) {
-    return copyleaksToken;
-  }
-  if (!COPYLEAKS_EMAIL || !COPYLEAKS_KEY) throw new Error('Copyleaks credentials not configured.');
-
-  const r = await fetch('https://id.copyleaks.com/v3/account/login/api', {
+  const r = await fetch('https://api.gptzero.me/v2/predict/text', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: COPYLEAKS_EMAIL, key: COPYLEAKS_KEY }),
-  });
-  const data = await r.json();
-  if (!r.ok || !data.access_token) throw new Error('Copyleaks login failed: ' + (data.message || 'Unknown error'));
-
-  copyleaksToken = data.access_token;
-  copyleaksTokenExpiry = data['.expires'];
-  console.log('Copyleaks token refreshed');
-  return copyleaksToken;
-}
-
-async function submitCopyleaksScan(text, scanId) {
-  const token = await getCopyleaksToken();
-  const base64 = Buffer.from(text, 'utf-8').toString('base64');
-
-  const r = await fetch(`https://api.copyleaks.com/v3/businesses/submit/file/${scanId}`, {
-    method: 'PUT',
     headers: {
-      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
+      'x-api-key': GPTZERO_KEY,
     },
-    body: JSON.stringify({
-      base64,
-      filename: 'submission.txt',
-      properties: {
-        webhooks: {
-          status: `${APP_URL}/api/copyleaks-webhook/{STATUS}`,
-          newResult: `${APP_URL}/api/copyleaks-webhook/new-result`,
-          completion: `${APP_URL}/api/copyleaks-webhook/completion`,
-        },
-        sandbox: false,
-        sensitivityLevel: 4,
-        filters: {
-          minCopiedWords: 8,
-        },
-        scanning: {
-          internet: true,
-          copyleaksDb: true,
-        },
-      },
-    }),
+    body: JSON.stringify({ document: text, multiscan: false }),
   });
 
-  if (!r.ok) {
-    const err = await r.text();
-    throw new Error('Copyleaks submit failed: ' + err);
-  }
-  return scanId;
-}
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || data.message || 'GPTZero error');
 
-async function pollCopyleaksScan(scanId, maxWaitMs = 120000) {
-  const token = await getCopyleaksToken();
-  const startTime = Date.now();
-  const POLL_INTERVAL = 4000; // poll every 4 seconds
+  const doc = data.documents?.[0];
+  if (!doc) throw new Error('No results from GPTZero');
 
-  while (Date.now() - startTime < maxWaitMs) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+  const sentences = (doc.sentences || []).map(s => ({
+    text:          s.sentence,
+    aiProbability: Math.round((s.generated_prob || 0) * 100),
+    isAI:          (s.generated_prob || 0) > 0.5,
+  }));
 
-    const r = await fetch(`https://api.copyleaks.com/v3/businesses/${scanId}/status`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+  const aiScore = Math.round((doc.average_generated_prob || 0) * 100);
+  const burstiness = doc.burstiness_scores?.[0] ?? null;
+  const perplexity = doc.perplexity ? Math.round(doc.perplexity) : null;
+  const classification = doc.predicted_class || 'unknown';
 
-    if (!r.ok) continue;
-    const status = await r.json();
-
-    // Status: 0 = pending, 1 = completed, 2 = error
-    if (status.status === 1) {
-      // Fetch results
-      const res = await fetch(`https://api.copyleaks.com/v3/businesses/${scanId}/results`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Could not fetch Copyleaks results');
-      return await res.json();
-    }
-    if (status.status === 2) throw new Error('Copyleaks scan failed');
-    // status 0 = still scanning, keep polling
-  }
-  throw new Error('Copyleaks scan timed out after 2 minutes');
-}
-
-function parseCopyleaksResults(results, scanId) {
-  if (!results) return { similarityPercent: 0, sources: [], matchedWords: 0, scanId };
-
-  // Copyleaks v3 results structure
-  const doc = results.scannedDocument || {};
-  const totalWords = doc.totalWords || 1;
-
-  // Calculate similarity from identical + minorChanges words
-  const matchedWords = (doc.identical?.words || 0) + (doc.minorChanges?.words || 0);
-  const score = Math.min(Math.round((matchedWords / totalWords) * 100), 100);
-
-  // Collect sources from all categories
-  const allSources = [
-    ...(results.internet || []),
-    ...(results.database || []),
-  ];
-
-  const sources = allSources
-    .sort((a, b) => (b.matchedWords || 0) - (a.matchedWords || 0))
-    .slice(0, 5)
-    .map(r => ({
-      url:          r.url || r.link || '',
-      title:        r.title || r.url || r.link || 'Unknown Source',
-      matchPercent: Math.round(((r.matchedWords || 0) / totalWords) * 100),
-      matchedWords: r.matchedWords || 0,
-    }))
-    .filter(s => s.title);
+  const labelMap = {
+    human: 'Likely Human Written',
+    mixed: 'Mixed — Partially AI Generated',
+    ai:    'Almost Certainly AI Generated',
+  };
 
   return {
-    similarityPercent: score,
-    sources,
-    totalWords,
-    matchedWords,
-    scanId,
+    aiScore,
+    aiLabel:    labelMap[classification] || 'Uncertain',
+    aiVerdict:  doc.feedback || `GPTZero classified this text as "${classification}". Average AI probability: ${aiScore}%.`,
+    sentences,
+    burstiness,
+    perplexity,
+    classification,
+    source: 'gptzero',
   };
 }
 
-// No-op webhook receiver (Copyleaks requires a valid webhook URL)
-app.post('/api/copyleaks-webhook/:status', (req, res) => {
-  console.log('Copyleaks webhook received:', req.params.status);
-  res.sendStatus(200);
-});
-
-// ── AI CALL HELPER ────────────────────────────────────────
-async function callAI(prompt, maxTokens = 800) {
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data?.error?.message || 'AI error');
-  const raw = data.content.map(b => b.text || '').join('').trim();
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON in response');
-  return JSON.parse(match[0]);
-}
-
-// ── CHECK ─────────────────────────────────────────────────
-app.post('/api/check', auth, async (req, res) => {
+// ── GPTZERO DEEP SCAN ENDPOINT ────────────────────────────
+app.post('/api/gptzero-scan', auth, async (req, res) => {
   try {
-    const { text, mode, filename, certTitle, certInstitution, checkKind } = req.body;
-    if (!text || text.trim().length < 10) return res.status(400).json({ error: 'Please provide some text to check.' });
-    if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'AI service not configured.' });
+    const { text } = req.body;
+    if (!text || text.trim().length < 50)
+      return res.status(400).json({ error: 'Please provide at least 50 characters of text.' });
+    if (!GPTZERO_KEY)
+      return res.status(500).json({ error: 'GPTZero is not configured on this server.' });
 
-    const u = await db.get('SELECT plan,checks_used,checks_limit,sub_expires FROM users WHERE id=$1', [req.user.id]);
-    // Free tier: 1 check allowed, no subscription required
-    // Paid tiers: check subscription validity
-    const isFree = u.plan === 'free';
-    const isPaid = ['basic','researcher','university'].includes(u.plan);
+    const u = await db.get('SELECT plan,gptzero_used,gptzero_limit,sub_expires FROM users WHERE id=$1', [req.user.id]);
+    const plan = PLANS[u.plan];
+    if (!plan || plan.gptzeroChecks === 0)
+      return res.status(403).json({ error: 'GPTZero Deep Scan is not available on your current plan. Upgrade to Basic or higher.', upgrade: true });
 
-    if (!isFree && !isPaid)
-      return res.status(403).json({ error: 'No active subscription. Please subscribe first.', subscribe: true });
-    if (isPaid && u.sub_expires && new Date(u.sub_expires) < new Date())
+    if (u.plan !== 'free' && u.sub_expires && new Date(u.sub_expires) < new Date())
       return res.status(403).json({ error: 'Your subscription has expired. Please renew.', subscribe: true });
-    if (u.checks_used >= u.checks_limit)
-      return res.status(429).json({
-        error: isFree
-          ? 'You have used your free trial check. Subscribe to continue checking.'
-          : 'Monthly check limit reached. Please upgrade.',
-        subscribe: true,
-        freeLimitReached: isFree,
+
+    if (u.gptzero_used >= u.gptzero_limit)
+      return res.status(429).json({ error: `You have used all ${u.gptzero_limit} GPTZero deep scans this month. Upgrade for more.`, upgrade: true });
+
+    const words = text.trim().split(/\s+/).length;
+    const wordLimit = plan.gptzeroWords || 500;
+    if (words > wordLimit)
+      return res.status(400).json({
+        error: `Your text has ${words} words. Your plan allows up to ${wordLimit} words per GPTZero scan. Please shorten the text or upgrade your plan.`,
+        wordLimit, wordCount: words,
       });
 
-    const sample = text.slice(0, 3000);
-    const modes  = { text: 'full text passage', abstract: 'research abstract', title: 'research title' };
-    const kind   = checkKind || 'plagiarism';
+    const result = await runGPTZero(text.slice(0, wordLimit * 7));
+    await db.run('UPDATE users SET gptzero_used=gptzero_used+1 WHERE id=$1', [req.user.id]);
 
-    let plag = null, aiDet = null;
-
-    if (kind === 'plagiarism' || kind === 'both') {
-      const hasCopyleaks   = !!(COPYLEAKS_EMAIL && COPYLEAKS_KEY);
-      const isPaidUser     = ['basic','researcher','university'].includes(u.plan);
-      const copyleaksLeft  = (u.copyleaks_limit || 0) - (u.copyleaks_used || 0);
-      const canUseCopyleaks = hasCopyleaks && isPaidUser && copyleaksLeft > 0;
-
-      if (canUseCopyleaks) {
-        // ── Real Copyleaks database check ──────────────────
-        try {
-          const scanId = uuidv4().replace(/-/g, '').slice(0, 36);
-          console.log('Starting Copyleaks scan:', scanId);
-          await submitCopyleaksScan(sample, scanId);
-          const rawResults = await pollCopyleaksScan(scanId);
-          const cpResult   = parseCopyleaksResults(rawResults);
-
-          // Use Claude to generate a verdict and suggestions based on Copyleaks data
-          const verdictPrompt = `You are an academic integrity expert. A plagiarism scan returned these results:
-- Similarity score: ${cpResult.similarityPercent}%
-- Total words scanned: ${cpResult.totalWords}
-- Matched words: ${cpResult.matchedWords}
-- Top sources matched: ${cpResult.sources.slice(0,3).map(s => s.title + ' (' + s.matchPercent + '%)').join(', ') || 'None found'}
-
-Write a professional 2-3 sentence verdict and 3 improvement suggestions.
-Reply ONLY with JSON: {"verdict":"...","grammarIssues":0,"citationCount":0,"suggestions":["...","...","..."]}`;
-
-          const aiVerdict = await callAI(verdictPrompt, 500).catch(() => ({
-            verdict: cpResult.similarityPercent < 20
-              ? 'The document shows high originality with minimal matching content found.'
-              : cpResult.similarityPercent < 40
-              ? 'The document shows moderate similarity to existing sources. Review flagged sections.'
-              : 'The document shows significant similarity to existing sources and requires revision.',
-            grammarIssues: 0,
-            citationCount: cpResult.sources.length,
-            suggestions: ['Review and cite all matched sources properly.', 'Paraphrase sections that closely match existing work.', 'Use quotation marks for any direct quotes.'],
-          }));
-
-          // Increment copyleaks_used
-          await db.run('UPDATE users SET copyleaks_used=copyleaks_used+1 WHERE id=$1', [req.user.id]);
-
-          plag = {
-            similarityPercent: cpResult.similarityPercent,
-            verdict:           aiVerdict.verdict,
-            grammarIssues:     aiVerdict.grammarIssues || 0,
-            citationCount:     aiVerdict.citationCount || cpResult.sources.length,
-            matchedSources:    cpResult.sources.length,
-            suggestions:       aiVerdict.suggestions || [],
-            copyleaksSources:  cpResult.sources,
-            copyleaksScanId:   cpResult.scanId,
-            realCheck:         true,
-            copyleaksLeft:     copyleaksLeft - 1,
-          };
-        } catch (e) {
-          console.error('Copyleaks error, falling back to AI:', e.message);
-          // Fall back to AI check if Copyleaks fails
-          plag = await callAI(`Analyze this ${modes[mode] || 'text'} for academic originality.
-
-Text: "${sample}"
-
-Reply ONLY with JSON: {"similarityPercent":0,"verdict":"2-3 sentence assessment","grammarIssues":0,"citationCount":0,"matchedSources":0,"suggestions":["...","...","..."]}`).catch(() => ({
-            similarityPercent: 0, verdict: 'Analysis unavailable.', grammarIssues: 0,
-            citationCount: 0, matchedSources: 0, suggestions: ['Please try again.']
-          }));
-          plag.realCheck = false;
-        }
-      } else {
-        // ── AI-only check (free tier or no Copyleaks configured) ──
-        plag = await callAI(`Analyze this ${modes[mode] || 'text'} for academic originality and plagiarism.
-
-Text: "${sample}"
-
-Reply ONLY with this exact JSON (no markdown, no explanation):
-{"similarityPercent":0,"verdict":"2-3 sentence professional assessment","grammarIssues":0,"citationCount":0,"matchedSources":0,"suggestions":["tip one","tip two","tip three"]}
-
-Guidance: similarityPercent 0-100. Realistic: 5-20% original, 20-40% moderate, 40%+ serious.`).catch(() => ({
-          similarityPercent: 0, verdict: 'Analysis unavailable.', grammarIssues: 0,
-          citationCount: 0, matchedSources: 0, suggestions: ['Please try again.']
-        }));
-        plag.realCheck = false;
-      }
-    }
-
-    if (kind === 'ai' || kind === 'both') {
-      aiDet = await callAI(`You are an expert at detecting whether text was written by a human or generated by AI (ChatGPT, Gemini, Claude, etc.).
-
-Analyze this academic text:
-
-"${sample}"
-
-Check for these AI indicators:
-- Uniform sentence length and structure
-- Absence of personal voice, emotion, or anecdotes
-- Perfect grammar with no natural errors
-- Generic, encyclopedic phrasing
-- Repetitive transitions (furthermore, moreover, additionally)
-- Suspiciously well-organized paragraphs
-- No contractions or informal expressions
-- Lack of specific personal examples or experiences
-
-Reply ONLY with this exact JSON (no markdown, no explanation):
-{"aiScore":0,"aiVerdict":"2-3 sentence assessment of whether this is human or AI written","aiLabel":"Likely Human Written","indicators":["indicator 1","indicator 2","indicator 3"]}
-
-Rules:
-- aiScore: 0-100 (0=definitely human, 100=definitely AI)
-- aiLabel must be exactly one of: "Likely Human Written" | "Uncertain" | "Likely AI Generated" | "Almost Certainly AI Generated"
-- Be realistic: most student writing 10-40%, obvious AI output 70-95%`, 1000).catch(() => ({
-        aiScore: 0, aiVerdict: 'AI detection unavailable.', aiLabel: 'Uncertain', indicators: []
-      }));
-    }
-
-    // Defaults if one type was not run
-    if (!plag) plag = { similarityPercent: 0, verdict: '', grammarIssues: 0, citationCount: 0, matchedSources: 0, suggestions: [] };
-    if (!aiDet) aiDet = { aiScore: 0, aiVerdict: '', aiLabel: '', indicators: [] };
-
-    const cid = uuidv4();
-    await db.run(
-      `INSERT INTO checks (id,user_id,filename,mode,preview,similarity,grammar,citations,sources,verdict,suggestions,ai_score,ai_verdict,ai_indicators,copyleaks_sources,real_check)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-      [cid, req.user.id, filename || null, mode || 'text', text.slice(0, 200),
-       plag.similarityPercent, plag.grammarIssues, plag.citationCount, plag.matchedSources,
-       plag.verdict, JSON.stringify(plag.suggestions),
-       aiDet.aiScore, aiDet.aiVerdict, JSON.stringify(aiDet.indicators || []),
-       JSON.stringify(plag.copyleaksSources || []), plag.realCheck ? 1 : 0]
-    );
-    await db.run('UPDATE users SET checks_used=checks_used+1 WHERE id=$1', [req.user.id]);
-
-    res.json({
-      ...plag,
-      checkId: cid,
-      aiScore:      aiDet.aiScore,
-      aiVerdict:    aiDet.aiVerdict,
-      aiLabel:      aiDet.aiLabel,
-      aiIndicators: aiDet.indicators || [],
-      copyleaksSources: plag.copyleaksSources || [],
-      realCheck:    plag.realCheck || false,
-    });
-  } catch (e) { console.error('Check error:', e); res.status(500).json({ error: 'Check failed. Please try again.' }); }
-});
-
-// ── HUMANISER ─────────────────────────────────────────────────────────
-app.post('/api/humanise', auth, async (req, res) => {
-  try {
-    const { text, style } = req.body;
-    if (!text || text.trim().length < 20)
-      return res.status(400).json({ error: 'Please provide some text to humanise.' });
-    if (!ANTHROPIC_KEY)
-      return res.status(500).json({ error: 'AI service not configured.' });
-
-    const u = await db.get('SELECT plan,checks_used,checks_limit,sub_expires FROM users WHERE id=$1', [req.user.id]);
-    if (u.plan === 'none' || !u.sub_expires)
-      return res.status(403).json({ error: 'No active subscription. Please subscribe first.', subscribe: true });
-    if (new Date(u.sub_expires) < new Date())
-      return res.status(403).json({ error: 'Your subscription has expired. Please renew.', subscribe: true });
-    if (u.checks_used >= u.checks_limit)
-      return res.status(429).json({ error: 'Monthly check limit reached. Please upgrade.', subscribe: true });
-
-    // Persona system prompts - each gives Claude a real human identity to write from
-    const personas = {
-      academic: `You are a Nigerian professor with 15 years of experience writing academic papers. You have strong opinions and occasionally digress before returning to your point. You use phrases like "one cannot ignore" and "the reality is". Your sentences vary wildly in length. You repeat key ideas in different words for emphasis. You are not afraid to start a sentence with "And" or "But". You write like a person who thinks as they write.`,
-      student: `You are a final-year Nigerian university student who is intelligent but writes like a real person. You use contractions freely. You start sentences with "This is because" or "What this means is". Your paragraphs are uneven. You occasionally use a phrase like "it is important to note" but then immediately follow with something more personal. You make small logical jumps without perfectly bridging them.`,
-      casual: `You are a knowledgeable Nigerian professional explaining a complex topic to a colleague. You are warm, direct, use rhetorical questions like "But what does this actually mean in practice?" You use "Look," or "Here is the thing:" to introduce key points. You use one-sentence paragraphs for emphasis. Your tone is confident but never stiff.`,
-      balanced: `You are an experienced Nigerian researcher writing for an academic journal. You have a distinctive voice: measured but engaged. You vary sentence structure deliberately. You use hedging phrases naturally: "it appears that", "the evidence suggests", "one might argue". You occasionally pose a question and answer it yourself. You write with intellectual curiosity, not like someone filling a template.`,
-    };
-
-    const systemPrompt = personas[style] || personas.balanced;
-
-    const userPrompt = `This text was generated by an AI. Completely rewrite it so it reads as genuinely human-written. This is NOT light editing — you must TRANSFORM it deeply.
-
-ORIGINAL AI TEXT:
----
-${text.slice(0, 4000)}
----
-
-MANDATORY TRANSFORMATIONS — apply every single one:
-
-SENTENCES:
-- Rebuild at least 70% of sentences from scratch — do not just rearrange words
-- Create extreme length variation: some sentences 4-6 words, some 30-40 words
-- Use sentence fragments for emphasis. Deliberately.
-- Start at least 3 sentences with "And", "But", or "So"
-- Mix active and passive voice naturally
-
-BANNED AI PHRASES — replace ALL occurrences:
-"it is worth noting" → "what stands out here is"
-"furthermore" / "moreover" / "additionally" → "on top of that" / "beyond this" / "also"  
-"it is important to" → drop it or say "you have to understand that"
-"plays a crucial role" → "matters enormously" / "is central to"
-"in today's world" → "these days" / "right now"
-"in order to" → "to"
-"a wide range of" → "many" / "countless"
-"it can be seen that" → "clearly" / "evidently"
-"this highlights the importance of" → "this is why X matters"
-"in conclusion" → "to wrap up" / "all of this points to"
-"delve into" → "explore" / "get into"
-
-CONTRACTIONS — use throughout:
-it is → it's, they are → they're, we have → we've, cannot → can't, does not → doesn't, is not → isn't
-
-HUMAN MARKERS — add all of these:
-- At least 2 em-dashes for natural asides — like this one
-- At least 1 rhetorical question: "But why does this matter?" or similar
-- At least 2 hedging moments: "arguably", "in most cases", "from what we can tell", "at least in theory"  
-- At least 1 acknowledgement of complexity: "admittedly", "it is not that simple", "the picture is messier than it looks"
-- At least 1 moment addressing the reader directly: "consider what this means", "think about it this way"
-- Vary paragraph lengths: some 1-2 sentences, some 5-6 sentences
-
-PRESERVE EXACTLY:
-- Every fact, statistic, argument, and conclusion
-- All technical terms, citations, proper nouns
-- The overall logical progression
-
-OUTPUT ONLY the rewritten text. Nothing else.`;
-
-    // Try Sonnet first (better quality), fall back to Haiku
-    const tryModel = async (model) => {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model, max_tokens: 4096, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.error?.message || 'API error');
-      return data.content.map(b => b.text || '').join('').trim();
-    };
-
-    let humanised;
-    try {
-      humanised = await tryModel('claude-sonnet-4-20250514');
-    } catch (e) {
-      console.warn('Sonnet unavailable, using Haiku:', e.message);
-      humanised = await tryModel('claude-haiku-4-5-20251001');
-    }
-
-    if (!humanised) return res.status(502).json({ error: 'No output received. Please try again.' });
-
-    await db.run('UPDATE users SET checks_used=checks_used+1 WHERE id=$1', [req.user.id]);
-    res.json({ humanised, originalLength: text.length, humanisedLength: humanised.length });
-
-  } catch (e) {
-    console.error('Humanise error:', e);
-    res.status(500).json({ error: 'Humanisation failed. Please try again.' });
+    res.json({ ...result, wordCount: words, wordLimit, gptzeroUsed: u.gptzero_used + 1, gptzeroLimit: u.gptzero_limit });
+  } catch(e) {
+    console.error('GPTZero error:', e.message);
+    res.status(500).json({ error: 'GPTZero scan failed: ' + e.message });
   }
 });
 
-
-// ── FILE UPLOAD ───────────────────────────────────────────
-app.post('/api/extract', auth, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-  try {
-    let text = '';
-    const m = req.file.mimetype;
-    if (m === 'application/pdf') {
-      const d = await pdfParse(req.file.buffer); text = d.text;
-    } else if (m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const d = await mammoth.extractRawText({ buffer: req.file.buffer }); text = d.value;
-    } else {
-      text = req.file.buffer.toString('utf-8');
-    }
-    text = text.replace(/\s+/g, ' ').trim();
-    if (text.length < 20) return res.status(422).json({ error: 'Could not extract enough text.' });
-    res.json({ text, filename: req.file.originalname });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'File extraction failed.' }); }
-});
 // ── AI CALL HELPER ────────────────────────────────────────
 async function callAI(prompt, maxTokens = 800) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -871,6 +535,52 @@ async function callAI(prompt, maxTokens = 800) {
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('No JSON in response');
   return JSON.parse(match[0]);
+}
+
+// ── WEB-SEARCH-GROUNDED PLAGIARISM CHECK ──────────────────
+// Uses Claude's native web_search tool so the model compares the
+// submitted text against real, current web content instead of
+// guessing from memory alone.
+async function callAIWithSearch(prompt, maxTokens = 1500) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: maxTokens,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || 'AI search error');
+
+  // Collect search result count for transparency, and the final text answer
+  const searchCalls = (data.content || []).filter(b => b.type === 'server_tool_use' && b.name === 'web_search').length;
+  const raw = (data.content || []).filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in response');
+  const parsed = JSON.parse(match[0]);
+  parsed._searchesPerformed = searchCalls;
+  return parsed;
+}
+
+// Split text into chunks for paragraph-level plagiarism scoring
+function chunkText(text, maxChunkWords = 120) {
+  const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+  const chunks = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/);
+    if (words.length <= maxChunkWords) {
+      chunks.push(para);
+    } else {
+      // Break long paragraphs into ~maxChunkWords pieces
+      for (let i = 0; i < words.length; i += maxChunkWords) {
+        chunks.push(words.slice(i, i + maxChunkWords).join(' '));
+      }
+    }
+  }
+  return chunks.filter(c => c.split(/\s+/).length >= 15); // skip tiny fragments
 }
 
 // ── CHECK ─────────────────────────────────────────────────
@@ -895,71 +605,68 @@ app.post('/api/check', auth, async (req, res) => {
     let plag = null, aiDet = null;
 
     if (kind === 'plagiarism' || kind === 'both') {
-      const hasCopyleaks   = !!(COPYLEAKS_EMAIL && COPYLEAKS_KEY);
-      const isPaidUser     = ['basic','researcher','university'].includes(u.plan);
-      const copyleaksLeft  = (u.copyleaks_limit || 0) - (u.copyleaks_used || 0);
-      const canUseCopyleaks = hasCopyleaks && isPaidUser && copyleaksLeft > 0;
+      try {
+        const chunks = chunkText(sample, 120).slice(0, 6); // cap at 6 chunks to control cost/latency
 
-      if (canUseCopyleaks) {
-        // ── Real Copyleaks database check ──────────────────
-        try {
-          const scanId = uuidv4().replace(/-/g, '').slice(0, 36);
-          console.log('Starting Copyleaks scan:', scanId);
-          await submitCopyleaksScan(sample, scanId);
-          const rawResults = await pollCopyleaksScan(scanId);
-          const cpResult   = parseCopyleaksResults(rawResults);
+        // ── Self-plagiarism check: compare against this user's own past checks ──
+        const pastChecks = await db.all(
+          'SELECT preview FROM checks WHERE user_id=$1 ORDER BY created_at DESC LIMIT 15',
+          [req.user.id]
+        ).catch(() => []);
+        const ownHistoryText = (pastChecks || []).map(c => c.preview).filter(Boolean).join(' ').slice(0, 2000);
 
-          // Use Claude to generate a verdict and suggestions based on Copyleaks data
-          const verdictPrompt = `You are an academic integrity expert. A plagiarism scan returned these results:
-- Similarity score: ${cpResult.similarityPercent}%
-- Total words scanned: ${cpResult.totalWords}
-- Matched words: ${cpResult.matchedWords}
-- Top sources matched: ${cpResult.sources.slice(0,3).map(s => s.title + ' (' + s.matchPercent + '%)').join(', ') || 'None found'}
+        // ── Search-grounded comparison ──
+        const searchPrompt = `You are an academic plagiarism detector with live web search access. Analyze this ${modes[mode] || 'text'} for originality.
 
-Write a professional 2-3 sentence verdict and 3 improvement suggestions.
-Reply ONLY with JSON: {"verdict":"...","grammarIssues":0,"citationCount":0,"suggestions":["...","...","..."]}`;
+TEXT TO CHECK:
+"${sample}"
 
-          const aiVerdict = await callAI(verdictPrompt, 500).catch(() => ({
-            verdict: cpResult.similarityPercent < 20
-              ? 'The document shows high originality with minimal matching content found.'
-              : cpResult.similarityPercent < 40
-              ? 'The document shows moderate similarity to existing sources. Review flagged sections.'
-              : 'The document shows significant similarity to existing sources and requires revision.',
-            grammarIssues: 0,
-            citationCount: cpResult.sources.length,
-            suggestions: ['Review and cite all matched sources properly.', 'Paraphrase sections that closely match existing work.', 'Use quotation marks for any direct quotes.'],
-          }));
+${ownHistoryText ? `ADDITIONAL CONTEXT — this author's own previous submissions (check for self-plagiarism / recycled content):
+"${ownHistoryText}"
+` : ''}
 
-          // Increment copyleaks_used
-          await db.run('UPDATE users SET copyleaks_used=copyleaks_used+1 WHERE id=$1', [req.user.id]);
+Instructions:
+1. Identify 3-5 distinctive phrases or claims from the text that would be unusual if they appeared verbatim elsewhere.
+2. Use web_search to check if those phrases appear on existing web pages, academic sources, or common reference content.
+3. If self-plagiarism context was provided, compare the new text against it for recycled/duplicate content.
+4. Base your similarity score on what you actually find in search results, not assumptions.
 
-          plag = {
-            similarityPercent: cpResult.similarityPercent,
-            verdict:           aiVerdict.verdict,
-            grammarIssues:     aiVerdict.grammarIssues || 0,
-            citationCount:     aiVerdict.citationCount || cpResult.sources.length,
-            matchedSources:    cpResult.sources.length,
-            suggestions:       aiVerdict.suggestions || [],
-            copyleaksSources:  cpResult.sources,
-            copyleaksScanId:   cpResult.scanId,
-            realCheck:         true,
-            copyleaksLeft:     copyleaksLeft - 1,
-          };
-        } catch (e) {
-          console.error('Copyleaks error, falling back to AI:', e.message);
-          // Fall back to AI check if Copyleaks fails
-          plag = await callAI(`Analyze this ${modes[mode] || 'text'} for academic originality.
+Reply ONLY with this exact JSON (no markdown, no explanation, no text outside the JSON):
+{"similarityPercent":0,"verdict":"2-3 sentence professional assessment citing what was found","grammarIssues":0,"citationCount":0,"matchedSources":0,"selfPlagiarism":false,"suggestions":["tip one","tip two","tip three"],"flaggedPhrases":["phrase that matched a source, if any"]}
 
-Text: "${sample}"
+Guidance: similarityPercent 0-100 based on actual search findings. If searches found no matches, score low (0-15%) and say so honestly in the verdict.`;
 
-Reply ONLY with JSON: {"similarityPercent":0,"verdict":"2-3 sentence assessment","grammarIssues":0,"citationCount":0,"matchedSources":0,"suggestions":["...","...","..."]}`).catch(() => ({
-            similarityPercent: 0, verdict: 'Analysis unavailable.', grammarIssues: 0,
-            citationCount: 0, matchedSources: 0, suggestions: ['Please try again.']
-          }));
-          plag.realCheck = false;
+        const searchResult = await callAIWithSearch(searchPrompt, 1800);
+
+        // ── Chunk-level scoring for the heatmap (runs in parallel, lighter model) ──
+        let chunkScores = [];
+        if (chunks.length > 1) {
+          const chunkPrompt = `Score each of these ${chunks.length} text passages for likely originality (0-100, where 0=fully original and 100=highly likely copied/templated content based on generic phrasing, common knowledge statements, or formulaic structure).
+
+${chunks.map((c, i) => `PASSAGE ${i + 1}: "${c.slice(0, 400)}"`).join('\n\n')}
+
+Reply ONLY with JSON: {"scores":[score1,score2,...]} — one number per passage, same order.`;
+
+          chunkScores = await callAI(chunkPrompt, 600)
+            .then(r => r.scores || [])
+            .catch(() => chunks.map(() => null));
         }
-      } else {
-        // ── AI-only check (free tier or no Copyleaks configured) ──
+
+        plag = {
+          similarityPercent: searchResult.similarityPercent,
+          verdict:           searchResult.verdict,
+          grammarIssues:     searchResult.grammarIssues || 0,
+          citationCount:     searchResult.citationCount || 0,
+          matchedSources:    searchResult.matchedSources || 0,
+          suggestions:       searchResult.suggestions || [],
+          selfPlagiarism:    searchResult.selfPlagiarism || false,
+          flaggedPhrases:    searchResult.flaggedPhrases || [],
+          searchesPerformed: searchResult._searchesPerformed || 0,
+          chunks:            chunks.map((text, i) => ({ text: text.slice(0, 200), score: chunkScores[i] ?? null })),
+        };
+        plag.realCheck = true; // grounded in real web search, not pure guess
+      } catch (e) {
+        console.error('Search-grounded check failed, falling back to estimate:', e.message);
         plag = await callAI(`Analyze this ${modes[mode] || 'text'} for academic originality and plagiarism.
 
 Text: "${sample}"
@@ -1004,35 +711,29 @@ Rules:
     }
 
     // Defaults if one type was not run
-    if (!plag) plag = { similarityPercent: 0, verdict: '', grammarIssues: 0, citationCount: 0, matchedSources: 0, suggestions: [] };
+    if (!plag) plag = { similarityPercent: 0, verdict: '', grammarIssues: 0, citationCount: 0, matchedSources: 0, suggestions: [], chunks: [], flaggedPhrases: [], selfPlagiarism: false, searchesPerformed: 0 };
     if (!aiDet) aiDet = { aiScore: 0, aiVerdict: '', aiLabel: '', indicators: [] };
 
     const cid = uuidv4();
     await db.run(
-      `INSERT INTO checks (id,user_id,filename,mode,preview,similarity,grammar,citations,sources,verdict,suggestions,ai_score,ai_verdict,ai_indicators,copyleaks_sources,real_check)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      `INSERT INTO checks (id,user_id,filename,mode,preview,similarity,grammar,citations,sources,verdict,suggestions,ai_score,ai_verdict,ai_indicators,real_check)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [cid, req.user.id, filename || null, mode || 'text', text.slice(0, 200),
        plag.similarityPercent, plag.grammarIssues, plag.citationCount, plag.matchedSources,
        plag.verdict, JSON.stringify(plag.suggestions),
        aiDet.aiScore, aiDet.aiVerdict, JSON.stringify(aiDet.indicators || []),
-       JSON.stringify(plag.copyleaksSources || []), plag.realCheck ? 1 : 0]
+       plag.realCheck ? 1 : 0]
     );
     await db.run('UPDATE users SET checks_used=checks_used+1 WHERE id=$1', [req.user.id]);
 
-    // Refresh user for latest counts
-    const updatedUser = await safeUser(req.user.id);
-
     res.json({
       ...plag,
-      checkId:          cid,
+      checkId:      cid,
       aiScore:      aiDet.aiScore,
       aiVerdict:    aiDet.aiVerdict,
       aiLabel:      aiDet.aiLabel,
       aiIndicators: aiDet.indicators || [],
-      copyleaksSources: plag.copyleaksSources || [],
-      realCheck:        plag.realCheck || false,
-      copyleaksUsed:    updatedUser.copyleaks_used || 0,
-      copyleaksLimit:   updatedUser.copyleaks_limit || 0,
+      realCheck:    plag.realCheck || false,
     });
   } catch (e) { console.error('Check error:', e); res.status(500).json({ error: 'Check failed. Please try again.' }); }
 });
@@ -1050,7 +751,7 @@ PASS 1 — STRUCTURAL TRANSFORMATION:
 - Add 1–2 personal hedging phrases per paragraph: "it seems", "one might argue", 
   "interestingly", "it is worth noting", "this suggests"
 - Introduce occasional incomplete thoughts completed in the next sentence
-` : `
+` : pass === 2 ? `
 PASS 2 — VOICE AND RHYTHM TRANSFORMATION:
 - Read what you produced and identify any remaining robotic patterns
 - Vary sentence LENGTH dramatically — some should be under 10 words, some over 30
@@ -1062,6 +763,26 @@ PASS 2 — VOICE AND RHYTHM TRANSFORMATION:
 - Add one or two rhetorical questions where they fit naturally
 - The final output must feel like it was written by a thoughtful, intelligent human
   who knows their subject well but writes naturally, not a language model
+` : `
+PASS 3 — AI PATTERN SCRUBBER (final cleanup pass):
+You are now hunting for the specific tells that AI detectors are trained to catch. Go through the text and aggressively eliminate:
+- Em-dash overuse — replace most em-dashes with commas, periods, or parentheses instead
+- The phrase patterns "it's important to note", "it's worth noting", "in conclusion",
+  "overall", "in summary", "this highlights", "this underscores", "plays a crucial role",
+  "serves as a", "stands as a testament" — remove or replace every single one
+- Perfectly parallel sentence structures (e.g. three sentences in a row with identical
+  grammatical shape) — break the pattern by making one noticeably different
+- Triplet lists ("X, Y, and Z" appearing repeatedly as a stylistic crutch) — vary how
+  lists are presented, sometimes just describe items in prose instead
+- Overly balanced "on one hand / on the other hand" framing — humans rarely hedge this
+  symmetrically
+- Generic intensifiers like "significantly", "substantially", "considerably" used
+  more than once — replace with specific detail instead
+- Check that the piece doesn't end on a neat, tidy, summarizing final sentence —
+  humans often trail off on a specific point, a small caveat, or an example instead
+  of wrapping everything in a bow
+This is a precision edit, not a rewrite — keep everything that already reads naturally
+and only fix what still sounds machine-generated.
 `;
 
   const prompt = `You are a world-class academic ghostwriter specialising in making AI-generated text completely undetectable. Your rewrites fool even the most advanced AI detection systems including GPTZero, Turnitin AI, and Originality.ai.
@@ -1106,6 +827,19 @@ REWRITE NOW:`;
   return data.content.map(b => b.text || '').join('').trim();
 }
 
+// Quick AI-detection self-check used after humanising, to verify the result
+// and flag any sentences that still read as AI-generated.
+async function quickAIDetectionCheck(text) {
+  const prompt = `Score this text for how likely it is to be flagged as AI-generated by a detector (0-100, where 0=definitely human, 100=definitely AI). Also list up to 3 specific sentences (quoted exactly from the text) that still sound the most AI-like, if any.
+
+TEXT:
+"${text.slice(0, 3000)}"
+
+Reply ONLY with JSON: {"aiScore":0,"flaggedSentences":["sentence one if any"]}`;
+
+  return callAI(prompt, 600).catch(() => ({ aiScore: null, flaggedSentences: [] }));
+}
+
 app.post('/api/humanise', auth, async (req, res) => {
   try {
     const { text, style } = req.body;
@@ -1138,14 +872,21 @@ app.post('/api/humanise', auth, async (req, res) => {
     };
     const styleDesc = styles[style] || styles.balanced;
 
-    // ── Two-pass humanisation for deep transformation ──────
-    console.log('Humanise pass 1 starting...');
+    // ── Three-pass humanisation for deep transformation ─────
+    console.log('Humanise pass 1 (structure) starting...');
     const pass1 = await runHumanisePass(text, styleDesc, 1);
 
-    console.log('Humanise pass 2 starting...');
-    const humanised = await runHumanisePass(pass1, styleDesc, 2);
+    console.log('Humanise pass 2 (voice) starting...');
+    const pass2 = await runHumanisePass(pass1, styleDesc, 2);
+
+    console.log('Humanise pass 3 (AI pattern scrub) starting...');
+    const humanised = await runHumanisePass(pass2, styleDesc, 3);
 
     if (!humanised) return res.status(502).json({ error: 'No output received. Please try again.' });
+
+    // ── Self-check: verify the result against our own AI detector ──
+    console.log('Running self-check on humanised output...');
+    const selfCheck = await quickAIDetectionCheck(humanised);
 
     // Count as one check
     await db.run('UPDATE users SET checks_used=checks_used+1 WHERE id=$1', [req.user.id]);
@@ -1154,7 +895,9 @@ app.post('/api/humanise', auth, async (req, res) => {
       humanised,
       originalLength: text.length,
       humanisedLength: humanised.length,
-      passes: 2,
+      passes: 3,
+      selfCheckScore: selfCheck.aiScore,
+      stillFlagged: selfCheck.flaggedSentences || [],
     });
   } catch (e) {
     console.error('Humanise error:', e);
@@ -1438,8 +1181,8 @@ app.post('/api/admin/set-plan', auth, async (req, res) => {
   const pl = PLANS[plan];
   if (!pl) return res.status(400).json({ error: 'Invalid plan.' });
   const exp = new Date(); exp.setDate(exp.getDate() + 30);
-  const r = await db.run('UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,sub_expires=$3 WHERE email=$4',
-    [plan, pl.checks, exp.toISOString(), email.toLowerCase().trim()]);
+  const r = await db.run('UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,gptzero_limit=$3,gptzero_used=0,sub_expires=$4 WHERE email=$5',
+    [plan, pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), email.toLowerCase().trim()]);
   if (r.rowCount === 0) return res.status(404).json({ error: 'User not found.' });
   res.json({ success: true, message: `${email} upgraded to ${plan}` });
 });
@@ -1738,6 +1481,105 @@ app.post('/api/admin/email-test', auth, async (req, res) => {
   }
 });
 
+// ── AMBASSADOR ROUTES ─────────────────────────────────────
+
+app.post('/api/ambassador/apply', auth, async (req, res) => {
+  try {
+    const { institution, role, whatsapp, motivation } = req.body;
+    if (!institution || !role) return res.status(400).json({ error: 'Institution and role are required.' });
+
+    const user = await db.get('SELECT id,name,email FROM users WHERE id=$1', [req.user.id]);
+    const existing = await db.get('SELECT id,status FROM ambassadors WHERE user_id=$1', [req.user.id]);
+    if (existing) {
+      return res.status(409).json({
+        error: existing.status === 'approved' ? 'You are already an approved ambassador.' : 'You have already applied. Your application is under review.',
+        status: existing.status,
+      });
+    }
+
+    const id = uuidv4();
+    await db.run(
+      `INSERT INTO ambassadors (id,user_id,name,email,institution,role,whatsapp,motivation)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, user.id, user.name, user.email, institution, role, whatsapp || null, motivation || null]
+    );
+    res.json({ success: true, message: 'Application submitted! We will review and respond within 24 hours.' });
+  } catch(e) { console.error(e); res.status(500).json({ error: 'Application failed.' }); }
+});
+
+app.get('/api/ambassador/status', auth, async (req, res) => {
+  try {
+    const amb = await db.get('SELECT * FROM ambassadors WHERE user_id=$1', [req.user.id]);
+    res.json({ ambassador: amb || null });
+  } catch(e) { res.status(500).json({ error: 'Failed.' }); }
+});
+
+app.get('/api/admin/ambassadors', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try {
+    const [pending, approved, all] = await Promise.all([
+      db.get("SELECT COUNT(*) c FROM ambassadors WHERE status='pending'"),
+      db.get("SELECT COUNT(*) c FROM ambassadors WHERE status='approved'"),
+      db.all(`SELECT a.*, u.plan, u.checks_used FROM ambassadors a JOIN users u ON a.user_id = u.id
+              ORDER BY CASE a.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, a.created_at DESC`),
+    ]);
+    res.json({ pending: parseInt(pending.c), approved: parseInt(approved.c), ambassadors: all });
+  } catch(e) { console.error(e); res.status(500).json({ error: 'Failed.' }); }
+});
+
+app.post('/api/admin/ambassador/approve', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try {
+    const { ambassador_id } = req.body;
+    const amb = await db.get('SELECT * FROM ambassadors WHERE id=$1', [ambassador_id]);
+    if (!amb) return res.status(404).json({ error: 'Ambassador not found.' });
+
+    await db.run(`UPDATE ambassadors SET status='approved', activated_at=NOW() WHERE id=$1`, [ambassador_id]);
+
+    const exp = new Date(); exp.setDate(exp.getDate() + 30);
+    const pl = PLANS['researcher'];
+    await db.run(
+      `UPDATE users SET plan='researcher', checks_limit=$1,
+       checks_used=0, gptzero_limit=$2, gptzero_used=0, sub_expires=$3 WHERE id=$4`,
+      [pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), amb.user_id]
+    );
+
+    const existingAff = await db.get('SELECT id FROM affiliates WHERE user_id=$1', [amb.user_id]);
+    if (!existingAff) {
+      const code = amb.name.replace(/\s+/g, '').substring(0, 6).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+      await db.run('INSERT INTO affiliates (id,user_id,code) VALUES ($1,$2,$3)', [uuidv4(), amb.user_id, code]);
+    }
+
+    res.json({ success: true, message: `${amb.name} approved as ambassador and given free Pro plan.` });
+  } catch(e) { console.error(e); res.status(500).json({ error: 'Approval failed.' }); }
+});
+
+app.post('/api/admin/ambassador/reject', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try {
+    const { ambassador_id } = req.body;
+    await db.run(`UPDATE ambassadors SET status='rejected' WHERE id=$1`, [ambassador_id]);
+    res.json({ success: true, message: 'Application rejected.' });
+  } catch(e) { res.status(500).json({ error: 'Failed.' }); }
+});
+
+app.post('/api/admin/ambassador/renew', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try {
+    const { ambassador_id } = req.body;
+    const amb = await db.get('SELECT * FROM ambassadors WHERE id=$1', [ambassador_id]);
+    if (!amb) return res.status(404).json({ error: 'Not found.' });
+    const exp = new Date(); exp.setDate(exp.getDate() + 30);
+    const pl = PLANS['researcher'];
+    await db.run(
+      `UPDATE users SET plan='researcher', checks_limit=$1,
+       checks_used=0, gptzero_limit=$2, gptzero_used=0, sub_expires=$3 WHERE id=$4`,
+      [pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), amb.user_id]
+    );
+    res.json({ success: true, message: `${amb.name} Pro plan renewed for 30 days.` });
+  } catch(e) { res.status(500).json({ error: 'Renewal failed.' }); }
+});
+
 // ── Health check endpoint ─────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({
@@ -1807,7 +1649,6 @@ function validateEnv() {
   console.log('Database:', process.env.DATABASE_URL ? 'configured' : 'MISSING');
   console.log('Anthropic:', process.env.ANTHROPIC_API_KEY ? 'configured' : 'not set');
   console.log('Paystack:', process.env.PAYSTACK_SECRET_KEY ? 'configured' : 'not set');
-  console.log('Copyleaks:', process.env.COPYLEAKS_API_KEY ? 'configured' : 'not set');
   console.log('Resend:', process.env.RESEND_API_KEY ? 'configured' : 'not set');
 }
 

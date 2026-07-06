@@ -165,6 +165,7 @@ function Navbar({ page, go }) {
               <button onClick={()=>nav('history')} style={{ background:'none', border:'none', color:page==='history'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>History</button>
               <button onClick={()=>nav('humanise')} style={{ background:'none', border:'none', color:page==='humanise'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>✍️ Humanise</button>
               <button onClick={()=>nav('affiliate')} style={{ background:'none', border:'none', color:page==='affiliate'?C.gold:'#e8d48a', fontSize:'.82rem', fontWeight:600, textTransform:'uppercase', letterSpacing:'.06em' }}>💰 Earn</button>
+              <button onClick={()=>nav('ambassador')} style={{ background:'none', border:'none', color:page==='ambassador'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>🎖️ Ambassador</button>
               <button onClick={()=>nav('subscribe')} style={{ background:user.plan==='none'?C.gold:user.plan==='free'?C.teal:'none', border:'none', color:user.plan==='none'||user.plan==='free'?C.white:'#9ca3af', fontSize:'.82rem', fontWeight:user.plan==='none'||user.plan==='free'?700:500, textTransform:'uppercase', letterSpacing:'.06em', padding:(user.plan==='none'||user.plan==='free')?'.4rem .9rem':0, borderRadius:2 }}>
                 {user.plan==='none'?'⚡ Subscribe':user.plan==='free'?'🎁 Free Trial':'Plans'}
               </button>
@@ -203,7 +204,7 @@ function Navbar({ page, go }) {
           ) : (
             <>
               <div style={{ color:C.gold, fontSize:'.82rem', fontWeight:600, padding:'.25rem 0' }}>Signed in as {user.name}</div>
-              {[['home','🏠 Home'],['dash','📊 Dashboard'],['history','📋 History'],['humanise','✍️ Humanise Text'],['affiliate','💰 Earn Commission'],['subscribe','💳 Plans']].map(([p,l])=>(
+              {[['home','🏠 Home'],['dash','📊 Dashboard'],['history','📋 History'],['humanise','✍️ Humanise Text'],['affiliate','💰 Earn Commission'],['ambassador','🎖️ Ambassador Programme'],['subscribe','💳 Plans']].map(([p,l])=>(
                 <button key={p} onClick={()=>nav(p)} style={{ background:'none', border:'none', color:page===p?C.gold:'#e5e7eb', fontSize:'.92rem', textAlign:'left', padding:'.6rem 0', borderBottom:`1px solid #2a3040`, fontWeight:page===p?600:400 }}>{l}</button>
               ))}
               {user.is_admin && <button onClick={()=>nav('admin')} style={{ background:'none', border:'none', color:'#e0b030', fontSize:'.92rem', textAlign:'left', padding:'.6rem 0', borderBottom:`1px solid #2a3040`, fontWeight:700 }}>⚙️ Admin Dashboard</button>}
@@ -250,7 +251,7 @@ function Footer({ go }) {
         </div>
         <div style={{ borderTop:'1px solid #1a2030', paddingTop:'1.5rem', display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'1rem' }}>
           <div style={{ fontSize:'.78rem', color:'#4b5563' }}>© 2026 OriginCheck. All rights reserved.</div>
-          <div style={{ fontSize:'.78rem', color:'#4b5563' }}>Built in Nigeria 🇳🇬 · Powered by Claude AI</div>
+          <div style={{ fontSize:'.78rem', color:'#4b5563' }}>Built in Nigeria 🇳🇬 · AI-Powered Academic Platform</div>
         </div>
       </div>
     </footer>
@@ -345,9 +346,9 @@ function Home({ go }) {
           <div style={{ color:C.muted, fontSize:'.9rem', marginBottom:'3rem' }}>All plans are billed monthly. Cancel anytime.</div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))', gap:'1.25rem' }}>
             {[
-              { key:'basic',      name:'Basic',      price:'₦3,500', period:'/mo', checks:'30 checks/month',  features:['2 Copyleaks DB checks/mo','30 AI checks/mo','Certificate download','Check history'], feat:false },
-              { key:'researcher', name:'Pro',        price:'₦10,000', period:'/mo', checks:'100 checks/month', features:['5 Copyleaks DB checks/mo','100 AI checks/mo','Document comparison','Priority processing'], feat:true },
-              { key:'university', name:'University', price:'₦25,000', period:'/mo', checks:'Unlimited checks', features:['15 Copyleaks DB checks/mo','Unlimited AI checks','LMS integration','Admin dashboard'], feat:false },
+              { key:'basic',      name:'Basic',      price:'₦3,500', period:'/mo', checks:'30 checks/month',  features:['30 AI-powered checks/mo','Certificate download','Check history','Email support'], feat:false },
+              { key:'researcher', name:'Pro',        price:'₦10,000', period:'/mo', checks:'100 checks/month', features:['100 AI-powered checks/mo','Document comparison','Priority processing','Priority support'], feat:true },
+              { key:'university', name:'University', price:'₦25,000', period:'/mo', checks:'Unlimited checks', features:['Unlimited AI-powered checks','LMS integration','Admin dashboard','Dedicated support'], feat:false },
             ].map(pl=>(
               <div key={pl.key} style={{ border:`${pl.feat?2:1.5}px solid ${pl.feat?C.teal:C.border}`, borderRadius:4, padding:'2rem 1.75rem', textAlign:'left', background:pl.feat?C.teal:C.white, color:pl.feat?C.white:C.ink, position:'relative' }}>
                 {pl.feat && <div style={{ position:'absolute', top:-12, left:'50%', transform:'translateX(-50%)', background:C.gold, color:C.ink, fontSize:'.62rem', fontWeight:700, fontFamily:"'DM Mono',monospace", letterSpacing:'.1em', textTransform:'uppercase', padding:'.2rem .8rem', borderRadius:20 }}>Most Popular</div>}
@@ -476,6 +477,118 @@ function Register({ go }) {
   );
 }
 
+// ── GPTZERO RESULTS COMPONENT ────────────────────────────
+function GPTZeroResults({ result }) {
+  const [showSentences, setShowSentences] = useState(true);
+
+  const classColor = { human: C.green, mixed: C.amber, ai: C.red, unknown: C.muted };
+  const classBg     = { human: '#f0fff4', mixed: '#fffbf0', ai: '#fff0f0', unknown: C.cream };
+  const classLabel  = { human: '✅ Likely Human Written', mixed: '⚠️ Mixed — Partially AI Generated', ai: '🤖 Almost Certainly AI Generated', unknown: '❓ Uncertain' };
+
+  const cls = result.classification || 'unknown';
+
+  return (
+    <div style={{ marginBottom:'1rem', animation:'slideIn .3s ease' }}>
+
+      <div style={{ background: classBg[cls], border:`2px solid ${classColor[cls]}40`, borderRadius:3, padding:'1.1rem 1.25rem', marginBottom:'1rem' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'1.25rem', flexWrap:'wrap' }}>
+          <div style={{ width:68, height:68, borderRadius:'50%', border:`3px solid ${classColor[cls]}`, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flexShrink:0, background:C.white }}>
+            <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.2rem', fontWeight:900, color:classColor[cls], lineHeight:1 }}>{result.aiScore}%</div>
+            <div style={{ fontSize:'.55rem', color:classColor[cls], fontWeight:700, textTransform:'uppercase', letterSpacing:'.05em' }}>AI</div>
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:700, color:classColor[cls], fontSize:'1rem', marginBottom:'.3rem' }}>{classLabel[cls]}</div>
+            <div style={{ fontSize:'.84rem', color:C.ink, lineHeight:1.6 }}>{result.aiVerdict}</div>
+          </div>
+        </div>
+
+        {(result.perplexity || result.burstiness) && (
+          <div style={{ display:'flex', gap:'1.5rem', marginTop:'.85rem', paddingTop:'.85rem', borderTop:`1px solid ${classColor[cls]}30`, flexWrap:'wrap' }}>
+            {result.perplexity && (
+              <div>
+                <div style={{ fontSize:'.68rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.08em' }}>Perplexity</div>
+                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, color:classColor[cls] }}>{result.perplexity}</div>
+                <div style={{ fontSize:'.68rem', color:C.muted }}>Higher = more human</div>
+              </div>
+            )}
+            {result.burstiness !== null && result.burstiness !== undefined && (
+              <div>
+                <div style={{ fontSize:'.68rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.08em' }}>Burstiness</div>
+                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, color:classColor[cls] }}>{typeof result.burstiness === 'number' ? result.burstiness.toFixed(2) : result.burstiness}</div>
+                <div style={{ fontSize:'.68rem', color:C.muted }}>Higher = more varied</div>
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize:'.68rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.08em' }}>Words Scanned</div>
+              <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, color:C.ink }}>{result.wordCount}</div>
+              <div style={{ fontSize:'.68rem', color:C.muted }}>of {result.wordLimit} limit</div>
+            </div>
+            <div>
+              <div style={{ fontSize:'.68rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.08em' }}>Source</div>
+              <div style={{ fontSize:'.85rem', fontWeight:700, color:'#4338ca' }}>GPTZero API</div>
+              <div style={{ fontSize:'.68rem', color:C.muted }}>gptzero.me</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {result.sentences && result.sentences.length > 0 && (
+        <div style={{ background:C.white, border:'1.5px solid #c4b5fd', borderRadius:3, overflow:'hidden' }}>
+          <div style={{ background:'#4338ca', padding:'.7rem 1rem', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:'#c4b5fd', letterSpacing:'.08em', fontWeight:600 }}>
+              SENTENCE-BY-SENTENCE ANALYSIS ({result.sentences.length} sentences)
+            </div>
+            <button onClick={()=>setShowSentences(s=>!s)}
+              style={{ background:'rgba(255,255,255,.15)', border:'none', color:C.white, fontSize:'.72rem', padding:'.25rem .65rem', borderRadius:2, cursor:'pointer' }}>
+              {showSentences ? 'Hide ▲' : 'Show ▼'}
+            </button>
+          </div>
+
+          <div style={{ padding:'.6rem 1rem', background:'#f5f3ff', borderBottom:'1px solid #e0d9ff', display:'flex', gap:'1.25rem', flexWrap:'wrap' }}>
+            {[['#dcfce7','#16a34a','Human Written'],['#fef9c3','#b45309','Uncertain'],['#fee2e2','#dc2626','AI Generated']].map(([bg,col,label])=>(
+              <div key={label} style={{ display:'flex', alignItems:'center', gap:'.35rem', fontSize:'.72rem', color:C.muted }}>
+                <div style={{ width:14, height:14, borderRadius:2, background:bg, border:`1.5px solid ${col}` }}/>
+                {label}
+              </div>
+            ))}
+          </div>
+
+          {showSentences && (
+            <div style={{ padding:'1rem', lineHeight:2.2, fontSize:'.88rem', color:C.ink }}>
+              {result.sentences.map((s, i) => {
+                const prob = s.aiProbability;
+                const bg   = prob < 30 ? '#dcfce7' : prob < 60 ? '#fef9c3' : '#fee2e2';
+                const border = prob < 30 ? '#16a34a' : prob < 60 ? '#b45309' : '#dc2626';
+                const textColor = prob < 30 ? '#14532d' : prob < 60 ? '#78350f' : '#7f1d1d';
+                return (
+                  <span key={i}
+                    title={`AI probability: ${prob}%`}
+                    style={{ background:bg, borderBottom:`2px solid ${border}`, color:textColor, padding:'2px 1px', cursor:'default', marginRight:'2px' }}>
+                    {s.text}{' '}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ padding:'.75rem 1rem', background:'#f5f3ff', borderTop:'1px solid #e0d9ff', display:'flex', gap:'1.5rem', flexWrap:'wrap' }}>
+            {[
+              ['Human sentences',  result.sentences.filter(s=>s.aiProbability<30).length,  '#16a34a'],
+              ['Uncertain',        result.sentences.filter(s=>s.aiProbability>=30&&s.aiProbability<60).length, '#b45309'],
+              ['AI sentences',     result.sentences.filter(s=>s.aiProbability>=60).length, '#dc2626'],
+            ].map(([label, count, color])=>(
+              <div key={label} style={{ textAlign:'center' }}>
+                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.3rem', fontWeight:900, color }}>{count}</div>
+                <div style={{ fontSize:'.7rem', color:C.muted }}>{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── RESULT TABS COMPONENT ────────────────────────────────
 function ResultTabs({ result, onDownload, certBusy, showTab, isFree, go }) {
   const [tab, setTab] = useState(showTab || 'plagiarism');
@@ -528,42 +641,57 @@ function ResultTabs({ result, onDownload, certBusy, showTab, isFree, go }) {
             ))}
           </div>
 
-          {/* Real check badge */}
-          {result.realCheck && (
-            <div style={{ background:'#f0fff4', border:'1px solid #b0e0c0', borderRadius:2, padding:'.5rem .9rem', marginBottom:'.75rem', fontSize:'.78rem', color:C.green, fontWeight:600, display:'flex', alignItems:'center', gap:'.4rem' }}>
-              ✅ Checked against Copyleaks global academic database — real source matching
+          {/* Check method badge */}
+          {result.realCheck ? (
+            <div style={{ background:'#f0fff4', border:'1px solid #b0e0c0', borderRadius:2, padding:'.5rem .9rem', marginBottom:'.75rem', fontSize:'.78rem', color:C.green, fontWeight:600, display:'flex', alignItems:'center', gap:'.4rem', flexWrap:'wrap' }}>
+              🔎 Web-search-grounded check{result.searchesPerformed > 0 ? ` — ${result.searchesPerformed} live searches performed` : ''}
             </div>
-          )}
-          {!result.realCheck && (
+          ) : (
             <div style={{ background:'#fff8e8', border:`1px solid ${C.gold}`, borderRadius:2, padding:'.5rem .9rem', marginBottom:'.75rem', fontSize:'.78rem', color:C.amber, fontWeight:600, display:'flex', alignItems:'center', gap:'.4rem' }}>
-              ⚡ AI-powered estimate — subscribe to a paid plan for real database checking
+              ⚡ AI-powered originality estimate
             </div>
           )}
 
-          {/* Copyleaks source matches */}
-          {result.copyleaksSources?.length > 0 && (
+          {/* Self-plagiarism warning */}
+          {result.selfPlagiarism && (
+            <div style={{ background:'#fff0f0', border:`1.5px solid ${C.red}`, borderRadius:2, padding:'.75rem 1rem', marginBottom:'.75rem', fontSize:'.83rem', color:C.red, fontWeight:600, display:'flex', alignItems:'center', gap:'.5rem' }}>
+              ⚠️ This text appears to overlap with your own previous submissions — check for recycled content.
+            </div>
+          )}
+
+          {/* Flagged phrases that matched search results */}
+          {result.flaggedPhrases?.length > 0 && (
             <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:3, overflow:'hidden', marginBottom:'1rem' }}>
-              <div style={{ background:C.ink, padding:'.65rem 1rem', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.gold, letterSpacing:'.08em', fontWeight:600 }}>🔗 MATCHED SOURCES ({result.copyleaksSources.length})</div>
-                <div style={{ fontSize:'.7rem', color:'#9ca3af' }}>from Copyleaks database</div>
+              <div style={{ background:C.ink, padding:'.65rem 1rem' }}>
+                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.gold, letterSpacing:'.08em', fontWeight:600 }}>⚠️ PHRASES FOUND ELSEWHERE ({result.flaggedPhrases.length})</div>
               </div>
-              {result.copyleaksSources.map((src, i) => (
-                <div key={i} style={{ padding:'.75rem 1rem', borderBottom: i < result.copyleaksSources.length-1 ? `1px solid ${C.border}` : 'none', display:'flex', alignItems:'center', gap:'.75rem' }}>
-                  <div style={{ width:44, height:44, borderRadius:3, background: src.matchPercent > 30 ? '#fff0f0' : '#fff8e8', border:`1.5px solid ${src.matchPercent > 30 ? C.red : C.amber}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                    <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'.95rem', fontWeight:900, color: src.matchPercent > 30 ? C.red : C.amber }}>{src.matchPercent}%</div>
-                  </div>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontWeight:600, fontSize:'.85rem', color:C.ink, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{src.title}</div>
-                    {src.url && (
-                      <a href={src.url} target="_blank" rel="noreferrer"
-                        style={{ fontSize:'.75rem', color:C.teal, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', display:'block' }}>
-                        {src.url.slice(0, 60)}{src.url.length > 60 ? '…' : ''}
-                      </a>
-                    )}
-                    <div style={{ fontSize:'.72rem', color:C.muted, marginTop:'.2rem' }}>{src.matchedWords} words matched</div>
-                  </div>
+              {result.flaggedPhrases.map((phrase, i) => (
+                <div key={i} style={{ padding:'.65rem 1rem', borderBottom: i < result.flaggedPhrases.length-1 ? `1px solid ${C.border}` : 'none', fontSize:'.83rem', color:C.ink, fontStyle:'italic' }}>
+                  "{phrase}"
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Paragraph-level heatmap */}
+          {result.chunks?.length > 1 && (
+            <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:3, overflow:'hidden', marginBottom:'1rem' }}>
+              <div style={{ background:C.ink, padding:'.65rem 1rem' }}>
+                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.gold, letterSpacing:'.08em', fontWeight:600 }}>📊 PARAGRAPH-BY-PARAGRAPH BREAKDOWN</div>
+              </div>
+              {result.chunks.map((chunk, i) => {
+                const score = chunk.score;
+                const cColor = score === null ? C.muted : score < 25 ? C.green : score < 55 ? C.amber : C.red;
+                const cBg = score === null ? C.cream : score < 25 ? '#f0fff4' : score < 55 ? '#fffbf0' : '#fff0f0';
+                return (
+                  <div key={i} style={{ padding:'.75rem 1rem', borderBottom: i < result.chunks.length-1 ? `1px solid ${C.border}` : 'none', display:'flex', alignItems:'flex-start', gap:'.75rem', background:cBg }}>
+                    <div style={{ width:38, height:38, borderRadius:3, background:C.white, border:`1.5px solid ${cColor}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                      <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'.78rem', fontWeight:900, color:cColor }}>{score ?? '—'}</div>
+                    </div>
+                    <div style={{ fontSize:'.8rem', color:C.ink, lineHeight:1.5, flex:1 }}>{chunk.text}{chunk.text.length >= 200 ? '…' : ''}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -694,8 +822,11 @@ function Dashboard({ go }) {
   const [extracting, setExtracting] = useState(false);
   const [plagResult, setPlagResult]   = useState(null);
   const [aiResult, setAiResult]       = useState(null);
-  const [copyleaksUsed, setCopyleaksUsed] = useState(user?.copyleaks_used || 0);
-  const [copyleaksLimit, setCopyleaksLimit] = useState(user?.copyleaks_limit || 0);
+  const [gptzeroUsed, setGptzeroUsed]       = useState(user?.gptzero_used || 0);
+  const [gptzeroLimit, setGptzeroLimit]     = useState(user?.gptzero_limit || 0);
+  const [gptzeroResult, setGptzeroResult]   = useState(null);
+  const [gptzeroLoading, setGptzeroLoading] = useState(false);
+  const [gptzeroErr, setGptzeroErr]         = useState('');
   const [checkId, setCheckId] = useState(null);
   const [err, setErr]         = useState('');
   const [certBusy, setCertBusy]     = useState(false);
@@ -738,15 +869,24 @@ function Dashboard({ go }) {
       setCheckId(d.checkId);
       if (checkKind === 'plagiarism') setPlagResult(d);
       else setAiResult(d);
-      if (d.copyleaksLimit !== undefined) {
-        setCopyleaksUsed(d.copyleaksUsed || 0);
-        setCopyleaksLimit(d.copyleaksLimit || 0);
-      }
       const me = await af('/api/auth/me'); setUser(me.user);
     } catch(e) {
       setErr(e.message);
       if (e.message.includes('subscription') || e.message.includes('expired') || e.message.includes('limit')) go('subscribe');
     } finally { setLoading(false); }
+  };
+
+  const runGPTZeroScan = async () => {
+    if (!text.trim()) return;
+    setGptzeroLoading(true); setGptzeroErr(''); setGptzeroResult(null);
+    try {
+      const d = await af('/api/gptzero-scan', { method:'POST', body:{ text } });
+      setGptzeroResult(d);
+      setGptzeroUsed(d.gptzeroUsed || 0);
+      setGptzeroLimit(d.gptzeroLimit || 0);
+    } catch(e) {
+      setGptzeroErr(e.message);
+    } finally { setGptzeroLoading(false); }
   };
 
   const downloadCert = async () => {
@@ -781,17 +921,9 @@ function Dashboard({ go }) {
             {noSub||expired ? (
               <Btn variant="gold" onClick={()=>go('subscribe')}>⚡ Subscribe to Check</Btn>
             ) : (
-              <div style={{ display:'flex', gap:'.5rem' }}>
-                <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'.75rem 1.1rem', textAlign:'center' }}>
-                  <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color:checksLeft<5?C.red:C.teal }}>{checksLeft}</div>
-                  <div style={{ fontSize:'.65rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.06em' }}>AI Checks</div>
-                </div>
-                {copyleaksLimit > 0 && (
-                  <div style={{ background:C.white, border:`1.5px solid ${C.teal}`, borderRadius:4, padding:'.75rem 1.1rem', textAlign:'center' }}>
-                    <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color:(copyleaksLimit-copyleaksUsed)<2?C.red:C.green }}>{copyleaksLimit - copyleaksUsed}</div>
-                    <div style={{ fontSize:'.65rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.06em' }}>DB Checks</div>
-                  </div>
-                )}
+              <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'.75rem 1.1rem', textAlign:'center' }}>
+                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color:checksLeft<5?C.red:C.teal }}>{checksLeft}</div>
+                <div style={{ fontSize:'.65rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.06em' }}>AI Checks</div>
               </div>
             )}
             <Btn variant="ghost" onClick={()=>go('history')} style={{ padding:'.6rem 1.1rem', fontSize:'.82rem' }}>History</Btn>
@@ -1063,9 +1195,9 @@ function Subscribe({ go }) {
   };
 
   const plans=[
-    {key:'basic',name:'Basic',price:'₦3,500',period:'/mo',checks:'30 checks/month',features:['2 Copyleaks DB checks/mo','30 AI checks/mo','Certificate download','Check history'],feat:false},
-    {key:'researcher',name:'Pro',price:'₦10,000',period:'/mo',checks:'100 checks/month',features:['5 Copyleaks DB checks/mo','100 AI checks/mo','Document comparison','Priority processing'],feat:true},
-    {key:'university',name:'University',price:'₦25,000',period:'/mo',checks:'Unlimited checks',features:['15 Copyleaks DB checks/mo','Unlimited AI checks','LMS integration','Admin dashboard'],feat:false},
+    {key:'basic',name:'Basic',price:'₦3,500',period:'/mo',checks:'30 checks/month',features:['30 AI-powered checks/mo','Certificate download','Check history','Email support'],feat:false},
+    {key:'researcher',name:'Pro',price:'₦10,000',period:'/mo',checks:'100 checks/month',features:['100 AI-powered checks/mo','Document comparison','Priority processing','Priority support'],feat:true},
+    {key:'university',name:'University',price:'₦25,000',period:'/mo',checks:'Unlimited checks',features:['Unlimited AI-powered checks','LMS integration','Admin dashboard','Dedicated support'],feat:false},
   ];
 
   const subExpired=user?.sub_expires&&new Date(user.sub_expires)<new Date();
@@ -1139,16 +1271,18 @@ function Subscribe({ go }) {
 // ── HUMANISER ────────────────────────────────────────────
 function Humaniser({ go }) {
   const { user, setUser, af } = useAuth();
-  const [inputText, setInputText]     = useState('');
-  const [outputText, setOutputText]   = useState('');
-  const [style, setStyle]             = useState('balanced');
-  const [loading, setLoading]         = useState(false);
-  const [loadingMsg, setLoadingMsg]   = useState('');
-  const [err, setErr]                 = useState('');
-  const [copied, setCopied]           = useState(false);
-  const [extracting, setExtracting]   = useState(false);
-  const [fname, setFname]             = useState('');
-  const fileRef                       = useRef(null);
+  const [inputText, setInputText]         = useState('');
+  const [outputText, setOutputText]       = useState('');
+  const [style, setStyle]                 = useState('balanced');
+  const [loading, setLoading]             = useState(false);
+  const [loadingMsg, setLoadingMsg]       = useState('');
+  const [err, setErr]                     = useState('');
+  const [copied, setCopied]               = useState(false);
+  const [extracting, setExtracting]       = useState(false);
+  const [fname, setFname]                 = useState('');
+  const [selfCheckScore, setSelfCheckScore] = useState(null);
+  const [stillFlagged, setStillFlagged]   = useState([]);
+  const fileRef                           = useRef(null);
 
   const noSub   = !user || user.plan === 'none';
   const expired = user?.sub_expires && new Date(user.sub_expires) < new Date();
@@ -1170,13 +1304,16 @@ function Humaniser({ go }) {
   const humanise = async () => {
     if (!inputText.trim()) return;
     setLoading(true); setErr(''); setOutputText('');
-    setLoadingMsg('Pass 1 of 2 — Restructuring sentences and paragraphs…');
+    setLoadingMsg('Pass 1 of 3 — Restructuring sentences and paragraphs…');
     try {
-      // Show pass 2 message after ~8 seconds (approximate time for pass 1)
-      const timer = setTimeout(() => setLoadingMsg('Pass 2 of 2 — Refining voice and rhythm…'), 12000);
+      const t1 = setTimeout(() => setLoadingMsg('Pass 2 of 3 — Refining voice and rhythm…'), 14000);
+      const t2 = setTimeout(() => setLoadingMsg('Pass 3 of 3 — Scrubbing AI patterns…'), 28000);
+      const t3 = setTimeout(() => setLoadingMsg('Running self-check on output…'), 42000);
       const d = await af('/api/humanise', { method:'POST', body:{ text: inputText, style } });
-      clearTimeout(timer);
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
       setOutputText(d.humanised);
+      setSelfCheckScore(d.selfCheckScore ?? null);
+      setStillFlagged(d.stillFlagged || []);
       const me = await af('/api/auth/me'); setUser(me.user);
     } catch(e) {
       setErr(e.message);
@@ -1282,7 +1419,7 @@ function Humaniser({ go }) {
                   ? <><Spin size={16} color={C.white}/> Humanising your text…</>
                   : noSub || expired ? 'Subscribe to humanise'
                   : checksLeft <= 0 ? 'Check limit reached'
-                  : '✍️ Deep Humanise (2-Pass)  →'}
+                  : '✍️ Deep Humanise (3-Pass) →'}
               </Btn>
               {!noSub && !expired && (
                 <div style={{ fontSize:'.7rem', color:C.muted, textAlign:'center', marginTop:'.4rem', fontFamily:"'DM Mono',monospace" }}>
@@ -1303,6 +1440,30 @@ function Humaniser({ go }) {
 
             {outputText ? (
               <>
+                {/* Self-check score banner */}
+                {selfCheckScore !== null && (
+                  <div style={{ margin:'.75rem .75rem 0', padding:'.75rem 1rem', borderRadius:3, background: selfCheckScore < 25 ? '#f0fff4' : selfCheckScore < 55 ? '#fffbf0' : '#fff0f0', border:`1.5px solid ${selfCheckScore < 25 ? C.green : selfCheckScore < 55 ? C.amber : C.red}`, display:'flex', alignItems:'center', gap:'.75rem' }}>
+                    <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color: selfCheckScore < 25 ? C.green : selfCheckScore < 55 ? C.amber : C.red }}>{selfCheckScore}%</div>
+                    <div>
+                      <div style={{ fontWeight:700, fontSize:'.85rem', color: selfCheckScore < 25 ? C.green : selfCheckScore < 55 ? C.amber : C.red }}>
+                        {selfCheckScore < 25 ? '✅ Passes AI Detection' : selfCheckScore < 55 ? '⚠️ May Still Trigger Some Detectors' : '❌ Still Reads as AI — Humanise Again'}
+                      </div>
+                      <div style={{ fontSize:'.75rem', color:C.muted, marginTop:'.15rem' }}>Self-check score — lower is better</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Flagged sentences that still sound AI */}
+                {stillFlagged?.length > 0 && (
+                  <div style={{ margin:'.5rem .75rem 0', padding:'.75rem 1rem', borderRadius:3, background:'#fffbf0', border:`1px solid ${C.amber}` }}>
+                    <div style={{ fontSize:'.72rem', fontWeight:700, color:C.amber, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.4rem' }}>Sentences that may still be flagged:</div>
+                    {stillFlagged.map((s, i) => (
+                      <div key={i} style={{ fontSize:'.8rem', color:C.ink, fontStyle:'italic', padding:'.25rem 0', borderTop: i > 0 ? `1px solid ${C.border}` : 'none' }}>"{s}"</div>
+                    ))}
+                    <div style={{ fontSize:'.72rem', color:C.muted, marginTop:'.4rem' }}>Tip: Copy these sentences and manually rewrite them for best results</div>
+                  </div>
+                )}
+
                 <div style={{ padding:'1rem', fontSize:'.88rem', lineHeight:1.8, color:C.ink, minHeight:320, maxHeight:500, overflowY:'auto', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
                   {outputText}
                 </div>
@@ -1326,7 +1487,7 @@ function Humaniser({ go }) {
                     <div style={{ marginTop:'1.25rem', fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, color:C.teal }}>
                       {loadingMsg || 'Humanising your text…'}
                     </div>
-                    <div style={{ marginTop:'.5rem', fontSize:'.82rem', color:C.muted }}>Two-pass deep rewrite — takes 20–40 seconds for best results</div>
+                    <div style={{ marginTop:'.5rem', fontSize:'.82rem', color:C.muted }}>Three-pass deep rewrite + self-check — takes 40–60 seconds for best results</div>
                     {/* Progress dots */}
                     <div style={{ display:'flex', gap:'.4rem', marginTop:'1rem' }}>
                       {[0,1,2,3,4].map(i=>(
@@ -1655,6 +1816,215 @@ function Affiliate({ go }) {
   );
 }
 
+// ── AMBASSADOR ───────────────────────────────────────────
+function Ambassador({ go }) {
+  const { user, af } = useAuth();
+  const [status, setStatus]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm]       = useState({ institution:'', role:'', whatsapp:'', motivation:'' });
+  const [submitting, setSubmitting] = useState(false);
+  const [msg, setMsg]         = useState('');
+  const [err, setErr]         = useState('');
+  const set = k => v => setForm(p => ({...p, [k]: v}));
+
+  useEffect(() => {
+    if (!user) { setLoading(false); return; }
+    af('/api/ambassador/status')
+      .then(d => { setStatus(d.ambassador); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const submit = async () => {
+    if (!form.institution || !form.role) return;
+    setSubmitting(true); setErr(''); setMsg('');
+    try {
+      const d = await af('/api/ambassador/apply', { method:'POST', body: form });
+      setMsg(d.message);
+      const s = await af('/api/ambassador/status');
+      setStatus(s.ambassador);
+    } catch(e) { setErr(e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  const benefits = [
+    ['🎓', 'Free Pro Plan', 'Get a free OriginCheck Pro plan (₦10,000/month value) for as long as you are an active ambassador.'],
+    ['💰', 'Earn Commission', 'Earn 20% on every subscriber you refer — paid directly to your Nigerian bank account.'],
+    ['🏅', 'Official Certificate', 'Receive an OriginCheck Ambassador certificate you can add to your academic profile and CV.'],
+    ['🌐', 'Listed on Website', 'Your name and institution will be featured on the OriginCheck ambassadors page.'],
+    ['🚀', 'Early Access', 'Be the first to test new features before they are released to the public.'],
+    ['📣', 'Marketing Support', 'We provide you with ready-made posts, flyers, and talking points to make sharing easy.'],
+  ];
+
+  if (loading) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', paddingTop:'5rem' }}>
+      <Spin size={36}/>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.paper, paddingTop:'5rem' }}>
+
+      <div style={{ background:C.ink, padding:'4rem 2rem', textAlign:'center' }}>
+        <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.gold, textTransform:'uppercase', letterSpacing:'.2em', marginBottom:'1rem' }}>Ambassador Programme</div>
+        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'2.5rem', fontWeight:900, color:C.white, marginBottom:'1rem', maxWidth:650, margin:'0 auto 1rem' }}>
+          Represent OriginCheck at Your Institution
+        </div>
+        <div style={{ color:'#9ca3af', maxWidth:560, margin:'0 auto', lineHeight:1.8, fontSize:'.95rem' }}>
+          Join our network of Nigerian academic ambassadors. Get a free Pro plan, earn commission, and help researchers at your institution protect the integrity of their work.
+        </div>
+      </div>
+
+      <div style={{ background:C.cream, borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ maxWidth:960, margin:'0 auto', padding:'3rem 1.5rem' }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.8rem', fontWeight:900, textAlign:'center', marginBottom:'2rem' }}>What You Get as an Ambassador</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:'1.25rem' }}>
+            {benefits.map(([icon, title, desc]) => (
+              <div key={title} style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'1.5rem' }}>
+                <div style={{ fontSize:'1.5rem', marginBottom:'.6rem' }}>{icon}</div>
+                <div style={{ fontWeight:700, fontSize:'1rem', marginBottom:'.4rem', color:C.teal }}>{title}</div>
+                <div style={{ fontSize:'.83rem', color:C.muted, lineHeight:1.65 }}>{desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background:C.white, borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ maxWidth:700, margin:'0 auto', padding:'2.5rem 1.5rem', textAlign:'center' }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, marginBottom:'1.25rem' }}>What We Ask in Return</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem', textAlign:'left' }}>
+            {[
+              ['📱', 'Share your referral link in at least 2 academic WhatsApp groups'],
+              ['💼', 'Post about OriginCheck on LinkedIn once a month'],
+              ['🤝', 'Refer at least 3 paying subscribers per month to keep your free plan'],
+              ['📣', 'Mention OriginCheck at departmental or faculty meetings when relevant'],
+            ].map(([icon, text]) => (
+              <div key={text} style={{ display:'flex', gap:'.75rem', alignItems:'flex-start', background:C.cream, borderRadius:3, padding:'1rem' }}>
+                <span style={{ fontSize:'1.1rem', flexShrink:0 }}>{icon}</span>
+                <span style={{ fontSize:'.85rem', color:C.ink, lineHeight:1.6 }}>{text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop:'1.25rem', background:'#fff8e8', border:`1px solid ${C.gold}`, borderRadius:3, padding:'.85rem 1.25rem', fontSize:'.83rem', color:C.muted }}>
+            ⚠️ The free Pro plan is renewed monthly. If referrals drop below 3 in a month, the plan pauses until activity resumes. Commission earnings are never taken back.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:720, margin:'0 auto', padding:'2.5rem 1.5rem' }}>
+
+        {!user && (
+          <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'2.5rem', textAlign:'center' }}>
+            <div style={{ fontSize:'2.5rem', marginBottom:'1rem' }}>🎖️</div>
+            <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.4rem', fontWeight:900, marginBottom:'.75rem' }}>Create an account first</div>
+            <div style={{ color:C.muted, fontSize:'.9rem', marginBottom:'1.5rem', lineHeight:1.7 }}>You need an OriginCheck account to apply as an ambassador. Registration is free.</div>
+            <div style={{ display:'flex', gap:'1rem', justifyContent:'center' }}>
+              <Btn variant="gold" onClick={()=>go('register')}>Create Free Account</Btn>
+              <Btn variant="ghost" onClick={()=>go('login')}>Log In</Btn>
+            </div>
+          </div>
+        )}
+
+        {user && status && (
+          <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, overflow:'hidden' }}>
+            <div style={{ background: status.status==='approved' ? C.teal : status.status==='rejected' ? '#c0392b' : '#b8860b', padding:'1.25rem 1.5rem', display:'flex', alignItems:'center', gap:'1rem' }}>
+              <div style={{ fontSize:'1.5rem' }}>{status.status==='approved' ? '✅' : status.status==='rejected' ? '❌' : '⏳'}</div>
+              <div>
+                <div style={{ fontWeight:700, color:C.white, fontSize:'1rem' }}>
+                  {status.status==='approved' ? 'You are an Active Ambassador!' : status.status==='rejected' ? 'Application Not Approved' : 'Application Under Review'}
+                </div>
+                <div style={{ color:'rgba(255,255,255,.75)', fontSize:'.83rem', marginTop:'.2rem' }}>
+                  {status.status==='approved' ? 'Your Pro plan is active. Keep referring to maintain your benefits.' : status.status==='rejected' ? 'Thank you for applying. You may reapply after 30 days.' : 'We will review your application within 24 hours and respond by email.'}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding:'1.5rem' }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem', marginBottom:'1.25rem' }}>
+                {[['Institution', status.institution], ['Role', status.role], ['Applied', new Date(status.created_at).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})], ['Total Referrals', status.total_referrals || 0]].map(([l,v])=>(
+                  <div key={l} style={{ background:C.cream, borderRadius:3, padding:'.85rem 1rem' }}>
+                    <div style={{ fontSize:'.7rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.25rem' }}>{l}</div>
+                    <div style={{ fontWeight:600, color:C.ink }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {status.status==='approved' && (
+                <div style={{ display:'flex', gap:'1rem', flexWrap:'wrap' }}>
+                  <Btn variant="teal" onClick={()=>go('affiliate')} style={{ padding:'.7rem 1.25rem', fontSize:'.85rem' }}>
+                    💰 View My Referral Link
+                  </Btn>
+                  <Btn variant="ghost" onClick={()=>go('dash')} style={{ padding:'.7rem 1.25rem', fontSize:'.85rem' }}>
+                    📊 Go to Dashboard
+                  </Btn>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {user && !status && (
+          <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'2rem' }}>
+            <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.4rem', fontWeight:900, marginBottom:'.5rem' }}>Apply to Become an Ambassador</div>
+            <div style={{ color:C.muted, fontSize:'.85rem', marginBottom:'1.5rem' }}>Applications are reviewed within 24 hours. Approved ambassadors receive their free Pro plan immediately.</div>
+
+            {err && <div style={{ background:'#fff0f0', border:`1px solid #ffc0c0`, borderRadius:2, padding:'.75rem 1rem', color:C.red, fontSize:'.85rem', marginBottom:'1rem' }}>{err}</div>}
+            {msg && (
+              <div style={{ background:'#f0fff4', border:`1px solid #b0e0c0`, borderRadius:2, padding:'1.25rem', color:C.green, fontSize:'.9rem', marginBottom:'1rem', fontWeight:600, textAlign:'center' }}>
+                ✅ {msg}
+              </div>
+            )}
+
+            {!msg && (
+              <>
+                <div style={{ marginBottom:'1rem' }}>
+                  <label style={{ display:'block', fontSize:'.72rem', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.35rem' }}>Institution / University <span style={{ color:C.red }}>*</span></label>
+                  <input value={form.institution} onChange={e=>set('institution')(e.target.value)} placeholder="e.g. Ahmadu Bello University, Zaria"
+                    style={{ width:'100%', background:C.cream, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.7rem .9rem', fontSize:'.9rem', outline:'none', color:C.ink }}/>
+                </div>
+
+                <div style={{ marginBottom:'1rem' }}>
+                  <label style={{ display:'block', fontSize:'.72rem', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.35rem' }}>Your Role <span style={{ color:C.red }}>*</span></label>
+                  <select value={form.role} onChange={e=>set('role')(e.target.value)}
+                    style={{ width:'100%', background:C.cream, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.7rem .9rem', fontSize:'.9rem', outline:'none', color:form.role?C.ink:C.muted }}>
+                    <option value="">Select your role…</option>
+                    {['Professor / Lecturer','Postgraduate Coordinator','Research Librarian','PhD Student','MSc Student','Student Union Officer','Department Head','Other Academic Staff'].map(r=>(
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ marginBottom:'1rem' }}>
+                  <label style={{ display:'block', fontSize:'.72rem', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.35rem' }}>WhatsApp Number (optional)</label>
+                  <input value={form.whatsapp} onChange={e=>set('whatsapp')(e.target.value)} placeholder="+234 800 000 0000"
+                    style={{ width:'100%', background:C.cream, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.7rem .9rem', fontSize:'.9rem', outline:'none', color:C.ink }}/>
+                </div>
+
+                <div style={{ marginBottom:'1.25rem' }}>
+                  <label style={{ display:'block', fontSize:'.72rem', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.35rem' }}>Why do you want to be an ambassador? (optional)</label>
+                  <textarea value={form.motivation} onChange={e=>set('motivation')(e.target.value)}
+                    placeholder="Tell us about your academic community and how you plan to share OriginCheck…"
+                    style={{ width:'100%', background:C.cream, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.75rem .9rem', fontSize:'.88rem', outline:'none', resize:'vertical', minHeight:90, lineHeight:1.6, color:C.ink }}/>
+                </div>
+
+                <Btn variant="gold" full onClick={submit} disabled={submitting||!form.institution||!form.role}
+                  style={{ padding:'.9rem', fontSize:'.95rem' }}>
+                  {submitting ? <><Spin size={16} color={C.ink}/> Submitting…</> : '🎖️ Submit Ambassador Application'}
+                </Btn>
+
+                <div style={{ fontSize:'.75rem', color:C.muted, textAlign:'center', marginTop:'.75rem', lineHeight:1.6 }}>
+                  By applying you agree to actively promote OriginCheck within your institution.<br/>Your application will be reviewed within 24 hours.
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <Footer go={go}/>
+    </div>
+  );
+}
+
 // ── CONTACT ───────────────────────────────────────────────
 function Contact({ go }) {
   const [f, setF] = useState({ name:'', email:'', subject:'', message:'' });
@@ -1881,7 +2251,8 @@ function Admin({ go }) {
   const [plan, setPlan]     = useState('basic');
   const [msg, setMsg]       = useState('');
   const [actionBusy, setActionBusy] = useState(false);
-  const [affiliates, setAffiliates] = useState(null);
+  const [affiliates, setAffiliates]   = useState(null);
+  const [ambassadors, setAmbassadors] = useState(null);
   const [emailForm, setEmailForm]   = useState({ segment:'all', subject:'', body:'', personalise:true });
   const [emailCounts, setEmailCounts] = useState(null);
   const [emailBusy, setEmailBusy]   = useState(false);
@@ -1892,6 +2263,7 @@ function Admin({ go }) {
   useEffect(()=>{
     af('/api/admin/stats').then(d=>{setStats(d);setLoading(false);}).catch(e=>{setErr(e.message);setLoading(false);});
     af('/api/admin/affiliates').then(d=>setAffiliates(d)).catch(()=>{});
+    af('/api/admin/ambassadors').then(d=>setAmbassadors(d)).catch(()=>{});
     af('/api/admin/email-preview').then(d=>setEmailCounts(d.segments)).catch(()=>{});
   },[]);
 
@@ -1973,7 +2345,7 @@ function Admin({ go }) {
         </div>
 
         <div style={{ display:'flex', borderBottom:`1px solid ${C.border}`, marginBottom:'1.5rem' }}>
-          {[['payments','Recent Payments'],['users','Recent Users'],['affiliates','Affiliates'],['email','📧 Email Users']].map(([v,l])=>(
+          {[['payments','Recent Payments'],['users','Recent Users'],['affiliates','Affiliates'],['ambassadors','🎖️ Ambassadors'],['email','📧 Email Users']].map(([v,l])=>(
             <button key={v} onClick={()=>setTab(v)} style={{ padding:'.75rem 1.5rem', border:'none', background:'transparent', fontFamily:"'DM Mono',monospace", fontSize:'.78rem', letterSpacing:'.05em', color:tab===v?C.teal:C.muted, borderBottom:`2px solid ${tab===v?C.gold:'transparent'}`, fontWeight:tab===v?600:400 }}>{l}</button>
           ))}
         </div>
@@ -2026,7 +2398,92 @@ function Admin({ go }) {
               </tbody>
             </table>
           )}
+          {tab==='ambassadors'&&(
+            <div style={{ padding:'1.5rem' }}>
+              <div style={{ display:'flex', gap:'1rem', marginBottom:'1.5rem', flexWrap:'wrap' }}>
+                {[['⏳','Pending Applications', ambassadors?.pending||0, C.amber],['✅','Active Ambassadors', ambassadors?.approved||0, C.green]].map(([ic,l,v,col])=>(
+                  <div key={l} style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'1.25rem 1.5rem', textAlign:'center', minWidth:160 }}>
+                    <div style={{ fontSize:'1.4rem', marginBottom:'.3rem' }}>{ic}</div>
+                    <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.8rem', fontWeight:900, color:col }}>{v}</div>
+                    <div style={{ fontSize:'.72rem', color:C.muted, textTransform:'uppercase', letterSpacing:'.08em', marginTop:'.2rem' }}>{l}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, overflow:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead><tr style={{ background:C.ink }}>
+                    {['Name','Institution','Role','Status','Referrals','Applied','Actions'].map(h=>(
+                      <th key={h} style={{ padding:'.75rem 1rem', textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:'.68rem', color:C.gold, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:600, whiteSpace:'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {(ambassadors?.ambassadors||[]).map((a,i)=>(
+                      <tr key={a.id} style={{ background:i%2===0?C.white:C.paper, borderBottom:`1px solid ${C.border}` }}>
+                        <td style={{ padding:'.75rem 1rem' }}>
+                          <div style={{ fontWeight:600, fontSize:'.85rem' }}>{a.name}</div>
+                          <div style={{ fontSize:'.75rem', color:C.muted }}>{a.email}</div>
+                          {a.whatsapp && <div style={{ fontSize:'.72rem', color:C.teal }}>📱 {a.whatsapp}</div>}
+                        </td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.83rem', color:C.ink, maxWidth:180 }}>{a.institution}</td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted, whiteSpace:'nowrap' }}>{a.role}</td>
+                        <td style={{ padding:'.75rem 1rem' }}>
+                          <span style={{ background: a.status==='approved'?C.green+'20':a.status==='rejected'?C.red+'20':C.amber+'20', color: a.status==='approved'?C.green:a.status==='rejected'?C.red:C.amber, fontSize:'.72rem', fontWeight:700, padding:'.25rem .65rem', borderRadius:20, fontFamily:"'DM Mono',monospace", textTransform:'uppercase' }}>
+                            {a.status}
+                          </span>
+                        </td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', textAlign:'center', fontWeight:700 }}>{a.total_referrals||0}</td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.75rem', color:C.muted, whiteSpace:'nowrap' }}>
+                          {new Date(a.created_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}
+                        </td>
+                        <td style={{ padding:'.75rem 1rem' }}>
+                          <div style={{ display:'flex', gap:'.5rem', flexWrap:'wrap' }}>
+                            {a.status==='pending' && (
+                              <>
+                                <button onClick={async()=>{
+                                  try { await af('/api/admin/ambassador/approve',{method:'POST',body:{ambassador_id:a.id}}); const d=await af('/api/admin/ambassadors'); setAmbassadors(d); }
+                                  catch(e){alert(e.message);}
+                                }} style={{ background:C.green, color:C.white, border:'none', padding:'.35rem .75rem', borderRadius:2, fontSize:'.75rem', fontWeight:600, cursor:'pointer' }}>
+                                  ✅ Approve
+                                </button>
+                                <button onClick={async()=>{
+                                  if(!window.confirm('Reject this application?')) return;
+                                  try { await af('/api/admin/ambassador/reject',{method:'POST',body:{ambassador_id:a.id}}); const d=await af('/api/admin/ambassadors'); setAmbassadors(d); }
+                                  catch(e){alert(e.message);}
+                                }} style={{ background:C.red, color:C.white, border:'none', padding:'.35rem .75rem', borderRadius:2, fontSize:'.75rem', fontWeight:600, cursor:'pointer' }}>
+                                  ❌ Reject
+                                </button>
+                              </>
+                            )}
+                            {a.status==='approved' && (
+                              <button onClick={async()=>{
+                                try { await af('/api/admin/ambassador/renew',{method:'POST',body:{ambassador_id:a.id}}); alert('Pro plan renewed for 30 days!'); }
+                                catch(e){alert(e.message);}
+                              }} style={{ background:C.teal, color:C.white, border:'none', padding:'.35rem .75rem', borderRadius:2, fontSize:'.75rem', fontWeight:600, cursor:'pointer' }}>
+                                🔄 Renew Plan
+                              </button>
+                            )}
+                            {a.motivation && (
+                              <button onClick={()=>alert('Motivation:\n\n'+a.motivation)}
+                                style={{ background:C.cream, color:C.ink, border:`1px solid ${C.border}`, padding:'.35rem .75rem', borderRadius:2, fontSize:'.75rem', cursor:'pointer' }}>
+                                📝 View Note
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {(!ambassadors?.ambassadors||ambassadors.ambassadors.length===0)&&(
+                      <tr><td colSpan={7} style={{ padding:'2rem', textAlign:'center', color:C.muted }}>No ambassador applications yet</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {tab==='email'&&(
+
             <div style={{ padding:'1.5rem' }}>
               {/* Segment selector */}
               <div style={{ marginBottom:'1.5rem' }}>
@@ -2227,19 +2684,20 @@ function AppInner() {
   );
 
   const pages = {
-    home:      <Home go={go}/>,
-    login:     <Login go={go}/>,
-    register:  <Register go={go}/>,
-    dash:      <Dashboard go={go}/>,
-    history:   <History go={go}/>,
-    humanise:  <Humaniser go={go}/>,
-    subscribe: <Subscribe go={go}/>,
-    admin:     <Admin go={go}/>,
-    affiliate: <Affiliate go={go}/>,
-    contact:   <Contact go={go}/>,
-    about:     <About go={go}/>,
-    privacy:   <Privacy go={go}/>,
-    terms:     <Terms go={go}/>,
+    home:       <Home go={go}/>,
+    login:      <Login go={go}/>,
+    register:   <Register go={go}/>,
+    dash:       <Dashboard go={go}/>,
+    history:    <History go={go}/>,
+    humanise:   <Humaniser go={go}/>,
+    subscribe:  <Subscribe go={go}/>,
+    admin:      <Admin go={go}/>,
+    affiliate:  <Affiliate go={go}/>,
+    ambassador: <Ambassador go={go}/>,
+    contact:    <Contact go={go}/>,
+    about:      <About go={go}/>,
+    privacy:    <Privacy go={go}/>,
+    terms:      <Terms go={go}/>,
   };
 
   return (
