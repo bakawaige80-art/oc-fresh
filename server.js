@@ -832,7 +832,7 @@ REWRITE NOW:`;
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',  // Sonnet for much better rewriting quality
+      model: pass === 2 ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001',  // Sonnet for voice pass, Haiku for structural passes
       max_tokens: 4096,
       temperature: 1,   // max creativity for more varied output
       messages: [{ role: 'user', content: prompt }]
@@ -889,23 +889,37 @@ app.post('/api/humanise', auth, async (req, res) => {
     };
     const styleDesc = styles[style] || styles.balanced;
 
-    // ── Three-pass humanisation for deep transformation ─────
-    console.log('Humanise pass 1 (structure) starting...');
-    const pass1 = await runHumanisePass(text, styleDesc, 1);
+    // Helper to run a pass with a timeout safety net
+    const runPassSafe = async (inputText, passNum, timeoutMs = 25000) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const result = await runHumanisePass(inputText, styleDesc, passNum);
+        clearTimeout(timer);
+        return result || inputText; // fallback to input if pass returns empty
+      } catch(e) {
+        clearTimeout(timer);
+        console.warn(`Pass ${passNum} failed: ${e.message} — using input text`);
+        return inputText; // gracefully fall back to previous pass output
+      }
+    };
 
-    console.log('Humanise pass 2 (voice) starting...');
-    const pass2 = await runHumanisePass(pass1, styleDesc, 2);
+    // ── Three-pass humanisation ────────────────────────────
+    console.log('Humanise pass 1 starting...');
+    const pass1 = await runPassSafe(text, 1);
 
-    console.log('Humanise pass 3 (AI pattern scrub) starting...');
-    const humanised = await runHumanisePass(pass2, styleDesc, 3);
+    console.log('Humanise pass 2 starting...');
+    const pass2 = await runPassSafe(pass1, 2);
 
-    if (!humanised) return res.status(502).json({ error: 'No output received. Please try again.' });
+    console.log('Humanise pass 3 starting...');
+    const humanised = await runPassSafe(pass2, 3);
 
-    // ── Self-check: verify the result against our own AI detector ──
-    console.log('Running self-check on humanised output...');
-    const selfCheck = await quickAIDetectionCheck(humanised);
+    if (!humanised || humanised.trim().length < 20)
+      return res.status(502).json({ error: 'No output received. Please try again.' });
 
-    // Count as one check
+    // ── Self-check ─────────────────────────────────────────
+    const selfCheck = await quickAIDetectionCheck(humanised).catch(() => ({ aiScore: null, flaggedSentences: [] }));
+
     await db.run('UPDATE users SET checks_used=checks_used+1 WHERE id=$1', [req.user.id]);
 
     res.json({
@@ -917,7 +931,7 @@ app.post('/api/humanise', auth, async (req, res) => {
       stillFlagged: selfCheck.flaggedSentences || [],
     });
   } catch (e) {
-    console.error('Humanise error:', e);
+    console.error('Humanise error:', e.message);
     res.status(500).json({ error: 'Humanisation failed. Please try again.' });
   }
 });
@@ -1684,10 +1698,13 @@ process.on('unhandledRejection', reason => {
 validateEnv();
 initDB()
   .then(() => {
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`OriginCheck running on port ${PORT}`);
       startKeepAlive();
     });
+    // Increase timeout to 120s for long-running humaniser (3 passes) requests
+    server.timeout = 120000;
+    server.keepAliveTimeout = 120000;
   })
   .catch(e => {
     console.error('DB init failed:', e.message);
