@@ -342,9 +342,21 @@ app.post('/api/payment/initialize', auth, async (req, res) => {
 
 app.get('/api/payment/callback', async (req, res) => {
   try {
-    const ok = await verifyPaystack(req.query.reference);
-    res.redirect(ok ? '/?payment=success' : '/?payment=failed');
-  } catch { res.redirect('/?payment=error'); }
+    const { reference, trxref } = req.query;
+    const ref = reference || trxref;
+    if (!ref) return res.redirect(`${process.env.FRONTEND_URL || APP_URL}/?payment=failed`);
+    const ok = await verifyPaystack(ref);
+    // Always redirect to frontend (not backend API URL)
+    const frontendUrl = process.env.FRONTEND_URL || APP_URL;
+    res.redirect(ok
+      ? `${frontendUrl}/?payment=success&ref=${ref}`
+      : `${frontendUrl}/?payment=failed`
+    );
+  } catch (e) {
+    console.error('Callback error:', e.message);
+    const frontendUrl = process.env.FRONTEND_URL || APP_URL;
+    res.redirect(`${frontendUrl}/?payment=error`);
+  }
 });
 
 app.get('/api/payment/verify/:ref', auth, async (req, res) => {
@@ -591,12 +603,17 @@ app.post('/api/check', auth, async (req, res) => {
     if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'AI service not configured.' });
 
     const u = await db.get('SELECT plan,checks_used,checks_limit,sub_expires FROM users WHERE id=$1', [req.user.id]);
-    if (u.plan === 'none' || !u.sub_expires)
+
+    // Free plan users get their 1 trial check — no sub_expires needed
+    const isFreeUser = u.plan === 'free';
+    const isPaidUser = ['basic','researcher','university'].includes(u.plan);
+
+    if (!isFreeUser && !isPaidUser)
       return res.status(403).json({ error: 'No active subscription. Please subscribe first.', subscribe: true });
-    if (new Date(u.sub_expires) < new Date())
+    if (isPaidUser && (!u.sub_expires || new Date(u.sub_expires) < new Date()))
       return res.status(403).json({ error: 'Your subscription has expired. Please renew.', subscribe: true });
     if (u.checks_used >= u.checks_limit)
-      return res.status(429).json({ error: 'Monthly check limit reached. Please upgrade.', subscribe: true });
+      return res.status(429).json({ error: `Monthly check limit reached. ${isFreeUser ? 'Subscribe for more checks.' : 'Please upgrade.'}`, subscribe: true });
 
     const sample = text.slice(0, 3000);
     const modes  = { text: 'full text passage', abstract: 'research abstract', title: 'research title' };

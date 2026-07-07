@@ -841,6 +841,20 @@ function Dashboard({ go }) {
   const expired    = !isFree && user?.sub_expires && new Date(user.sub_expires) < new Date();
   const checksLeft = user ? Math.max(0, user.checks_limit - user.checks_used) : 0;
 
+  // Show success banner if coming back from Paystack payment
+  const [paySuccess, setPaySuccess] = useState(() => {
+    const flag = sessionStorage.getItem('oc_pay_success');
+    if (flag) { sessionStorage.removeItem('oc_pay_success'); return true; }
+    return false;
+  });
+
+  // Auto-hide the payment success banner after 8 seconds
+  useEffect(() => {
+    if (!paySuccess) return;
+    const t = setTimeout(() => setPaySuccess(false), 8000);
+    return () => clearTimeout(t);
+  }, [paySuccess]);
+
   const handleFile = async file => {
     if (!file) return;
     setExtracting(true); setErr('');
@@ -929,6 +943,19 @@ function Dashboard({ go }) {
             <Btn variant="ghost" onClick={()=>go('history')} style={{ padding:'.6rem 1.1rem', fontSize:'.82rem' }}>History</Btn>
           </div>
         </div>
+
+        {/* Payment success banner */}
+        {paySuccess && (
+          <div style={{ background:'#f0fff4', border:`2px solid ${C.green}`, borderRadius:4, padding:'1rem 1.5rem', marginBottom:'1.5rem', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'.75rem', animation:'slideIn .4s ease' }}>
+            <div>
+              <div style={{ fontWeight:700, color:C.green, fontSize:'1rem' }}>🎉 Subscription activated successfully!</div>
+              <div style={{ fontSize:'.85rem', color:C.muted, marginTop:'.2rem' }}>
+                Welcome to {user?.plan === 'researcher' ? 'Pro' : user?.plan === 'university' ? 'University' : 'Basic'} plan — your checks are ready to use.
+              </div>
+            </div>
+            <button onClick={()=>setPaySuccess(false)} style={{ background:'none', border:'none', color:C.muted, fontSize:'1.2rem', cursor:'pointer' }}>✕</button>
+          </div>
+        )}
 
         {/* Free trial banner */}
         {isFree && checksLeft > 0 && (
@@ -2655,23 +2682,57 @@ function AppInner() {
 
   const go = p => { setPage(p); window.scrollTo(0,0); };
 
-  // Capture affiliate referral code from URL and save to localStorage
+  // Capture affiliate referral code from URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const ref = params.get('ref');
-    if (ref) {
+    if (ref && !params.get('payment')) {
       localStorage.setItem('oc_ref_code', ref);
-      // Clean URL
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
+
+  // Handle Paystack payment callback redirect
+  useEffect(() => {
+    if (!ready) return;
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get('payment');
+    const payRef = params.get('ref');
+
+    if (!paymentStatus) return;
+
+    // Clear query params immediately so refresh doesn't re-trigger
+    window.history.replaceState({}, '', window.location.pathname);
+
+    if (paymentStatus === 'success') {
+      // Set a flag so the dashboard shows a success banner
+      sessionStorage.setItem('oc_pay_success', '1');
+      // Re-fetch user so the updated plan/subscription shows immediately
+      const refreshUser = async () => {
+        try {
+          const token = localStorage.getItem('oc_tok');
+          if (!token) { go('login'); return; }
+          const r = await fetch(API + '/api/auth/me', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (r.ok) {
+            const d = await r.json();
+            setUser(d.user);
+          }
+        } catch(e) { console.error('Refresh error:', e); }
+      };
+      refreshUser().then(() => go('dash'));
+      setTimeout(() => go('dash'), 1500);
+    } else if (paymentStatus === 'failed' || paymentStatus === 'error') {
+      if (user) go('subscribe');
+      else go('login');
+    }
+  }, [ready]);
 
   useEffect(()=>{
     if (!ready) return;
     if (user && (page==='login'||page==='register')) go('dash');
     if (!user && (page==='dash'||page==='history'||page==='admin')) go('login');
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('payment') && user) go('subscribe');
   },[user, ready]);
 
   if (!ready) return (
