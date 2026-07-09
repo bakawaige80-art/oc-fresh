@@ -980,215 +980,234 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
       doc.on('end', () => resolve(Buffer.concat(bufs)));
       doc.on('error', reject);
 
-      // Register Arabic fonts if available
       if (ARABIC_FONTS_AVAILABLE) {
         doc.registerFont('Amiri',        FONT_REGULAR);
         doc.registerFont('Amiri-Bold',   FONT_BOLD);
         doc.registerFont('Amiri-Italic', FONT_ITALIC);
       }
+      const fontRegular = (t) => ARABIC_FONTS_AVAILABLE && hasArabic(t) ? 'Amiri'        : 'Helvetica';
+      const fontBold    = (t) => ARABIC_FONTS_AVAILABLE && hasArabic(t) ? 'Amiri-Bold'   : 'Helvetica-Bold';
+      const fontItalic  = (t) => ARABIC_FONTS_AVAILABLE && hasArabic(t) ? 'Amiri-Italic' : 'Helvetica-BoldOblique';
 
-      // Helper: pick correct font based on text content
-      const fontRegular = (text) => ARABIC_FONTS_AVAILABLE && hasArabic(text) ? 'Amiri'        : 'Helvetica';
-      const fontBold    = (text) => ARABIC_FONTS_AVAILABLE && hasArabic(text) ? 'Amiri-Bold'   : 'Helvetica-Bold';
-      const fontItalic  = (text) => ARABIC_FONTS_AVAILABLE && hasArabic(text) ? 'Amiri-Italic' : 'Helvetica-BoldOblique';
+      const W = doc.page.width;   // 841.89
+      const H = doc.page.height;  // 595.28
+      const pct      = chk.similarity || 0;
+      const aiScore  = chk.ai_score || 0;
+      const showAi   = overrides.showAi !== false;
 
-      const W = doc.page.width;
-      const H = doc.page.height;
-      const pct = chk.similarity;
+      // ── Colours ───────────────────────────────────────────
+      const NAVY    = '#0d1e3d';
+      const TEAL    = '#1a5c5b';
+      const GOLD    = '#c8a94a';
+      const GOLD_L  = '#f5e9c4';
+      const CREAM   = '#fdfaf4';
+      const WHITE   = '#ffffff';
+      const MUTED   = '#6b7280';
+      const DARK    = '#1a2332';
 
-      const TEAL   = '#2a7a79';
-      const TEAL_L = '#eaf6f6';
-      const TEAL_M = '#3a9c9a';
-      const GOLD   = '#c8a94a';
-      const GOLD_M = '#e8d48a';
-      const INK    = '#2d3a4a';
-      const PAPER  = '#fafaf8';
-      const MUTED  = '#718096';
-
-      const scoreColor = pct < 20 ? '#1a7a4a' : pct < 40 ? '#b8860b' : '#c0392b';
-      const scoreBg    = pct < 20 ? '#edfaf4' : pct < 40 ? '#fef9e7' : '#fdf0ee';
+      const scoreColor = pct < 20 ? '#15803d' : pct < 40 ? '#b45309' : '#b91c1c';
+      const scoreBg    = pct < 20 ? '#dcfce7' : pct < 40 ? '#fef3c7' : '#fee2e2';
       const scoreLabel = pct < 20 ? 'HIGH ORIGINALITY' : pct < 40 ? 'MODERATE SIMILARITY' : 'HIGH SIMILARITY';
+      const aiColor    = aiScore < 20 ? '#15803d' : aiScore < 50 ? '#b45309' : '#b91c1c';
+      const aiLabel    = aiScore < 20 ? 'Likely Human Written' : aiScore < 50 ? 'Uncertain' : aiScore < 75 ? 'Likely AI Generated' : 'Almost Certainly AI Generated';
 
-      const rawTitle = overrides.title || chk.filename || chk.preview || 'Submitted Document';
-      const cleanTitle = rawTitle.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').replace(/-/g, ' ').trim();
-      const displayInstitution = overrides.institution || user.institution || 'Independent Researcher';
+      const rawTitle         = overrides.title || chk.filename || chk.preview || 'Submitted Document';
+      const cleanTitle       = rawTitle.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').replace(/-/g, ' ').trim();
+      const titleDisplay     = hasArabic(cleanTitle) ? cleanTitle : cleanTitle.toUpperCase();
+      const displayInst      = overrides.institution || user.institution || 'Independent Researcher';
+      const authorName       = user.name || 'Unknown Author';
+      const issued           = new Date(chk.created_at);
+      const dateStr          = issued.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+      const certRef          = 'OC-' + chk.id.slice(0, 8).toUpperCase();
 
-      const aiScore = chk.ai_score || 0;
-      const aiLabel = aiScore < 20 ? 'Likely Human Written' : aiScore < 50 ? 'Uncertain' : aiScore < 75 ? 'Likely AI Generated' : 'Almost Certainly AI Generated';
-      const aiColor = aiScore < 20 ? '#1a7a4a' : aiScore < 50 ? '#b8860b' : '#c0392b';
+      // ── Background ────────────────────────────────────────
+      doc.rect(0, 0, W, H).fill(CREAM);
 
-      const issued  = new Date(chk.created_at);
-      const dateStr = issued.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-      const timeStr = issued.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-      const certRef = 'OC-' + chk.id.slice(0, 8).toUpperCase();
+      // ── Outer decorative border (double line) ─────────────
+      const B = 14; // border inset
+      doc.rect(B, B, W - B*2, H - B*2).lineWidth(3).strokeColor(NAVY).stroke();
+      doc.rect(B+5, B+5, W - (B+5)*2, H - (B+5)*2).lineWidth(0.8).strokeColor(GOLD).stroke();
 
-      // Fixed layout zones
-      const HEADER_H  = 70;
-      const META_H    = 72;
-      const SIDEBAR_W = 52;
-      const PANEL_W   = 185;
-      const contentX  = 68;
-      const panelX    = W - PANEL_W - 2;
-      const contentW  = panelX - contentX - 10;
-      const zoneTop   = HEADER_H + 8;
-      const zoneBot   = H - META_H - 6;
-      const zoneH     = zoneBot - zoneTop;
-
-      // Background
-      doc.rect(0, 0, W, H).fill(PAPER);
-
-      // Sidebar
-      doc.rect(0, 0, 44, H).fill('#3a7a79');  // lighter teal sidebar
-      doc.rect(44, 0, 8, H).fill(GOLD);
-      doc.save();
-      doc.translate(22, H / 2);
-      doc.rotate(-90);
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(7.5)
-         .text('ORIGINCHECK  \u00B7  ACADEMIC INTEGRITY PLATFORM  \u00B7  SIMILARITY REPORT',
-               -200, -4, { width: 400, align: 'center', characterSpacing: 1.2 });
-      doc.restore();
-
-      // Header band
-      doc.rect(SIDEBAR_W, 0, W - SIDEBAR_W, HEADER_H).fill('#f0fbfb');
-      doc.rect(SIDEBAR_W, HEADER_H - 4, W - SIDEBAR_W, 4).fill(GOLD);
-      doc.fillColor(TEAL).font('Helvetica-Bold').fontSize(22)
-         .text('Origin', contentX, 14, { continued: true })
-         .fillColor(GOLD).text('Check');
-      doc.fillColor(MUTED).font('Helvetica').fontSize(8)
-         .text('SIMILARITY REPORT', contentX, 40, { characterSpacing: 2 });
-      doc.moveTo(contentX, 55).lineTo(contentX + 110, 55).lineWidth(0.8).strokeColor(GOLD).stroke();
-      doc.fillColor(MUTED).font('Helvetica').fontSize(7)
-         .text('Academic Integrity Platform', contentX, 58);
-      doc.fillColor(TEAL).font('Helvetica-Bold').fontSize(13)
-         .text('CERTIFICATE OF ORIGINALITY', 185, 18, { width: W - 390, align: 'center', characterSpacing: 1.5 });
-      doc.fillColor(MUTED).font('Helvetica').fontSize(8)
-         .text('This document certifies the originality analysis of the submitted academic work', 185, 36, { width: W - 390, align: 'center' });
-      doc.fillColor(MUTED).font('Helvetica').fontSize(7.5)
-         .text('Ref: ' + certRef, W - 148, 20, { width: 133, align: 'right' });
-      doc.fillColor(MUTED).font('Helvetica').fontSize(7.5)
-         .text(dateStr, W - 148, 32, { width: 133, align: 'right' });
-
-      // Right score panel — spans full content zone
-      doc.rect(panelX, zoneTop - 2, PANEL_W + 2, zoneH + 4).fill('#2d7878');
-      doc.fillColor(GOLD).font('Helvetica-Bold').fontSize(8)
-         .text('SIMILARITY SCORE', panelX, zoneTop + 12, { width: PANEL_W, align: 'center', characterSpacing: 1 });
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(58)
-         .text(pct + '%', panelX, zoneTop + 28, { width: PANEL_W, align: 'center' });
-      doc.roundedRect(panelX + 18, zoneTop + 96, 149, 22, 3).fill(scoreBg);
-      doc.fillColor(scoreColor).font('Helvetica-Bold').fontSize(7.5)
-         .text(scoreLabel, panelX + 18, zoneTop + 102, { width: 149, align: 'center', characterSpacing: 1 });
-      doc.moveTo(panelX + 15, zoneTop + 128).lineTo(panelX + 170, zoneTop + 128)
-         .lineWidth(0.5).strokeColor(GOLD_M).stroke();
-      [['Grammar Issues', chk.grammar ?? 0], ['Source Matches', chk.sources ?? 0], ['Citations Found', chk.citations ?? 0]]
-        .forEach(([label, val], i) => {
-          const sy = zoneTop + 138 + i * 32;
-          doc.fillColor(GOLD_M).font('Helvetica').fontSize(7.5).text(label, panelX + 12, sy, { width: 100 });
-          doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(15)
-             .text(String(val), panelX + 100, sy - 2, { width: 70, align: 'right' });
-          if (i < 2) doc.moveTo(panelX + 12, sy + 16).lineTo(panelX + 173, sy + 16)
-             .lineWidth(0.3).strokeColor(TEAL_M).stroke();
-        });
-
-      // Content left side — institution, author, title, pills
-      let curY = zoneTop + 4;
-
-      // Institution
-      doc.fillColor(TEAL).font(fontBold(displayInstitution)).fontSize(15)
-         .text(displayInstitution, contentX, curY, { width: contentW });
-      const instLines = Math.ceil(displayInstitution.length / 52);
-      curY += instLines * 19;
-      doc.moveTo(contentX, curY)
-         .lineTo(contentX + Math.min(displayInstitution.length * 8.5, contentW), curY)
-         .lineWidth(2).strokeColor(GOLD).stroke();
-
-      // Author
-      curY += 7;
-      const authorName = user.name || 'Unknown Author';
-      doc.fillColor(INK).font(fontItalic(authorName)).fontSize(30)
-         .text(authorName, contentX, curY, { width: contentW });
-      curY += 42;
-
-      // Title
-      doc.fillColor(GOLD).font('Helvetica-Bold').fontSize(7)
-         .text('PAPER TITLE', contentX, curY, { characterSpacing: 1.5 });
-      curY += 11;
-      // Full title — no truncation, wraps naturally
-      // Arabic text: don't uppercase (Arabic has no uppercase)
-      const titleDisplay = hasArabic(cleanTitle) ? cleanTitle : cleanTitle.toUpperCase();
-      const titleLineCount = Math.ceil(cleanTitle.length / 60);
-      doc.fillColor(INK).font(fontBold(cleanTitle)).fontSize(9)
-         .text(titleDisplay, contentX, curY, { width: contentW, lineGap: 3 });
-      curY += Math.max(titleLineCount * 13, 14) + 10;
-
-      // Pills
-      const pillW = 120, pillH = 38, pillGap = 8;
-      const pillY = curY;
-      [
-        { label: 'Threshold Set', value: '25.0%', color: TEAL, bg: TEAL_L },
-        { label: 'Abstract Validation', value: pct + '.0%', color: scoreColor, bg: scoreBg },
-        { label: 'Similarity Score', value: pct + '.0%', color: scoreColor, bg: scoreBg },
-      ].forEach((pill, i) => {
-        const px = contentX + i * (pillW + pillGap);
-        doc.roundedRect(px, pillY, pillW, pillH, 3).fill(pill.bg);
-        doc.rect(px, pillY, 3, pillH).fill(pill.color);
-        doc.fillColor(MUTED).font('Helvetica').fontSize(7).text(pill.label, px + 8, pillY + 7, { width: pillW - 12 });
-        doc.fillColor(pill.color).font('Helvetica-Bold').fontSize(15).text(pill.value, px + 8, pillY + 20, { width: pillW - 12 });
+      // ── Corner ornaments ──────────────────────────────────
+      const cornerSize = 18;
+      [[B+2, B+2], [W-B-2-cornerSize, B+2], [B+2, H-B-2-cornerSize], [W-B-2-cornerSize, H-B-2-cornerSize]].forEach(([cx, cy]) => {
+        doc.rect(cx, cy, cornerSize, cornerSize).lineWidth(1.5).strokeColor(GOLD).stroke();
+        doc.rect(cx+3, cy+3, cornerSize-6, cornerSize-6).lineWidth(0.5).strokeColor(NAVY).stroke();
       });
-      const aiPillX = contentX + 3 * (pillW + pillGap);
-      const aiBg = aiScore < 20 ? '#edfaf4' : aiScore < 50 ? '#fef9e7' : '#fdf0ee';
-      doc.roundedRect(aiPillX, pillY, pillW, pillH, 3).fill(aiBg);
-      doc.rect(aiPillX, pillY, 3, pillH).fill(aiColor);
-      doc.fillColor(MUTED).font('Helvetica').fontSize(7).text('AI Detection', aiPillX + 8, pillY + 7);
-      doc.fillColor(aiColor).font('Helvetica-Bold').fontSize(9.5)
-         .text(aiScore + '% — ' + aiLabel, aiPillX + 8, pillY + 20, { width: pillW - 12 });
-      curY = pillY + pillH + 10;
 
-      // AI Verdict — conditional on showAi flag, fills remaining space
-      const showAiVerdict = overrides.showAi !== false;
-      const verdictText = (chk.ai_verdict || '').trim();
-      const verdictY = curY;
-      if (showAiVerdict && verdictText) {
-        const verdictH = Math.max(zoneBot - verdictY, 55);
-        doc.roundedRect(contentX, verdictY, panelX - contentX - 4, verdictH, 3).fill('#eaf6f6');
-        doc.rect(contentX, verdictY, 4, verdictH).fill(TEAL);
-        doc.fillColor(TEAL).font('Helvetica-Bold').fontSize(8)
-           .text('AI ANALYSIS VERDICT', contentX + 12, verdictY + 10, { characterSpacing: 1.2 });
-        // Bold, 14pt, stands out
-        doc.fillColor('#1a2a3a').font(fontBold(verdictText)).fontSize(12)
-           .text(verdictText, contentX + 12, verdictY + 24,
-                 { width: panelX - contentX - 24, lineGap: 4 });
+      // ── Navy top header band ───────────────────────────────
+      const HEADER_TOP = B + 10;
+      const HEADER_H   = 58;
+      doc.rect(B+10, HEADER_TOP, W - (B+10)*2, HEADER_H).fill(NAVY);
+      doc.rect(B+10, HEADER_TOP + HEADER_H - 3, W - (B+10)*2, 3).fill(GOLD);
+
+      // Platform name (left of header)
+      doc.fillColor(WHITE).font('Helvetica-Bold').fontSize(20)
+         .text('Origin', B+22, HEADER_TOP + 14, { continued: true })
+         .fillColor(GOLD).text('Check');
+      doc.fillColor(GOLD_L).font('Helvetica').fontSize(7)
+         .text('ACADEMIC INTEGRITY PLATFORM', B+22, HEADER_TOP + 37, { characterSpacing: 1.5 });
+
+      // Certificate title (center of header)
+      doc.fillColor(WHITE).font('Helvetica-Bold').fontSize(13)
+         .text('CERTIFICATE OF ORIGINALITY', 0, HEADER_TOP + 10, { width: W, align: 'center', characterSpacing: 2 });
+      doc.fillColor(GOLD_L).font('Helvetica').fontSize(7.5)
+         .text('This document certifies that the submitted academic work has been analysed for originality', 0, HEADER_TOP + 30, { width: W, align: 'center' });
+
+      // Ref + Date (right of header)
+      doc.fillColor(GOLD_L).font('Helvetica').fontSize(7)
+         .text('REF: ' + certRef, W - 170, HEADER_TOP + 12, { width: 150, align: 'right', characterSpacing: 1 });
+      doc.fillColor(WHITE).font('Helvetica').fontSize(7.5)
+         .text(dateStr, W - 170, HEADER_TOP + 26, { width: 150, align: 'right' });
+
+      // ── Main content zone ──────────────────────────────────
+      const contentTop  = HEADER_TOP + HEADER_H + 8;
+      const FOOTER_H    = 52;
+      const contentBot  = H - B - 10 - FOOTER_H - 4;
+      const contentH    = contentBot - contentTop;
+
+      // Left content column
+      const LEFT_X      = B + 18;
+      const SCORE_COL_W = 152;
+      const LEFT_W      = W - (B+18)*2 - SCORE_COL_W - 12;
+
+      // ── Score column (right side) ─────────────────────────
+      const scoreColX = LEFT_X + LEFT_W + 12;
+      doc.roundedRect(scoreColX, contentTop, SCORE_COL_W, contentH, 4).fill(NAVY);
+      doc.rect(scoreColX, contentTop, 4, contentH).fill(GOLD);
+
+      // Similarity score
+      doc.fillColor(GOLD).font('Helvetica-Bold').fontSize(7.5)
+         .text('SIMILARITY SCORE', scoreColX + 6, contentTop + 12, { width: SCORE_COL_W - 8, align: 'center', characterSpacing: 1.2 });
+      doc.fillColor(WHITE).font('Helvetica-Bold').fontSize(52)
+         .text(pct + '%', scoreColX, contentTop + 26, { width: SCORE_COL_W, align: 'center' });
+      doc.roundedRect(scoreColX + 14, contentTop + 84, SCORE_COL_W - 28, 20, 2).fill(scoreBg);
+      doc.fillColor(scoreColor).font('Helvetica-Bold').fontSize(7)
+         .text(scoreLabel, scoreColX + 14, contentTop + 90, { width: SCORE_COL_W - 28, align: 'center', characterSpacing: 1 });
+
+      // Divider
+      doc.moveTo(scoreColX + 12, contentTop + 114).lineTo(scoreColX + SCORE_COL_W - 12, contentTop + 114)
+         .lineWidth(0.4).strokeColor('#3a5a7a').stroke();
+
+      // Stats
+      [['Grammar Issues', chk.grammar ?? 0], ['Source Matches', chk.sources ?? 0], ['Citations Found', chk.citations ?? 0]].forEach(([label, val], i) => {
+        const sy = contentTop + 122 + i * 30;
+        doc.fillColor(GOLD_L).font('Helvetica').fontSize(6.5).text(label.toUpperCase(), scoreColX + 10, sy, { width: SCORE_COL_W - 12, characterSpacing: 0.8 });
+        doc.fillColor(WHITE).font('Helvetica-Bold').fontSize(16).text(String(val), scoreColX + 10, sy + 9, { width: SCORE_COL_W - 20, align: 'right' });
+        if (i < 2) doc.moveTo(scoreColX + 10, sy + 24).lineTo(scoreColX + SCORE_COL_W - 10, sy + 24).lineWidth(0.3).strokeColor('#2a4a6a').stroke();
+      });
+
+      // AI score in score column
+      if (showAi) {
+        const aiBoxY = contentTop + 118 + 3 * 30 + 4;
+        doc.moveTo(scoreColX + 12, aiBoxY).lineTo(scoreColX + SCORE_COL_W - 12, aiBoxY).lineWidth(0.4).strokeColor('#3a5a7a').stroke();
+        doc.fillColor(GOLD).font('Helvetica-Bold').fontSize(7)
+           .text('AI DETECTION', scoreColX + 6, aiBoxY + 6, { width: SCORE_COL_W - 8, align: 'center', characterSpacing: 1 });
+        doc.fillColor(WHITE).font('Helvetica-Bold').fontSize(22)
+           .text(aiScore + '%', scoreColX, aiBoxY + 18, { width: SCORE_COL_W, align: 'center' });
+        doc.fillColor(aiColor).font('Helvetica').fontSize(7)
+           .text(aiLabel, scoreColX + 6, aiBoxY + 42, { width: SCORE_COL_W - 12, align: 'center' });
       }
 
-      // Metadata bar — pinned to exact bottom
-      const metaY = H - META_H;
-      doc.rect(SIDEBAR_W, metaY, W - SIDEBAR_W, META_H).fill('#3d5068');
-      doc.rect(SIDEBAR_W, metaY, W - SIDEBAR_W, 3).fill(GOLD);
-      const metaColW = (W - SIDEBAR_W - 90) / 4;
-      [['Submitted By', user.name || 'Unknown'], ['Institution', displayInstitution],
-       ['Date Issued', dateStr + '  ' + timeStr], ['Certificate', certRef]]
-        .forEach(([label, val], i) => {
-          const mx = contentX + i * metaColW;
-          doc.fillColor(GOLD_M).font('Helvetica').fontSize(6.5)
-             .text(label.toUpperCase(), mx, metaY + 9, { characterSpacing: 1 });
-          doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8.5)
-             .text(val, mx, metaY + 20, { width: metaColW - 8 });
-        });
-      doc.fillColor(GOLD_M).font('Helvetica').fontSize(6.5)
-         .text('VERIFY ONLINE', contentX, metaY + 39, { characterSpacing: 1 });
-      doc.fillColor(GOLD).font('Helvetica').fontSize(7.5)
-         .text('https://origincheck.ng/verify?ref=' + certRef, contentX, metaY + 49);
+      // ── Left content: this is hereby to certify... ─────────
+      let curY = contentTop + 2;
 
-      // QR code
-      const qrBuf = await QRCode.toBuffer(
-        JSON.stringify({ id: chk.id, ref: certRef, score: pct, user: user.email, date: dateStr }),
-        { width: 90, margin: 1, color: { dark: '#ffffff', light: '#3d5068' } }
+      // Formal declaration line
+      doc.fillColor(MUTED).font('Helvetica').fontSize(7.5).text(
+        'THIS IS TO CERTIFY THAT',
+        LEFT_X, curY, { width: LEFT_W, align: 'left', characterSpacing: 2 }
       );
-      doc.image(qrBuf, W - 88, metaY + 5, { width: 58 });
+      curY += 13;
+
+      // Gold divider
+      doc.moveTo(LEFT_X, curY).lineTo(LEFT_X + 60, curY).lineWidth(1.5).strokeColor(GOLD).stroke();
+      curY += 8;
+
+      // Author name — large and prominent
+      doc.fillColor(DARK).font(fontItalic(authorName)).fontSize(28)
+         .text(authorName, LEFT_X, curY, { width: LEFT_W });
+      curY += 36;
+
+      // Institution line
+      doc.fillColor(MUTED).font('Helvetica').fontSize(7.5)
+         .text('of', LEFT_X, curY, { continued: false });
+      curY += 11;
+      doc.fillColor(TEAL).font(fontBold(displayInst)).fontSize(13)
+         .text(displayInst, LEFT_X, curY, { width: LEFT_W });
+      const instLines = Math.ceil(displayInst.length / 58);
+      curY += instLines * 17 + 4;
+
+      // "has submitted the following work for originality analysis"
+      doc.fillColor(MUTED).font('Helvetica').fontSize(7.5)
+         .text('has submitted the following academic work for originality analysis:', LEFT_X, curY, { width: LEFT_W });
+      curY += 14;
+
+      // Gold divider
+      doc.moveTo(LEFT_X, curY).lineTo(LEFT_X + LEFT_W * 0.7, curY).lineWidth(0.8).strokeColor(GOLD).stroke();
+      curY += 7;
+
+      // Paper title
+      doc.fillColor(MUTED).font('Helvetica').fontSize(6.5)
+         .text('PAPER TITLE', LEFT_X, curY, { characterSpacing: 1.5 });
+      curY += 9;
+      const titleLineCount = Math.ceil(cleanTitle.length / 65);
+      doc.fillColor(DARK).font(fontBold(cleanTitle)).fontSize(9)
+         .text(titleDisplay, LEFT_X, curY, { width: LEFT_W, lineGap: 2 });
+      curY += Math.max(titleLineCount * 12, 12) + 8;
+
+      // AI verdict box (only if showAi and there's space)
+      const verdictText = (chk.ai_verdict || '').trim();
+      if (showAi && verdictText && (contentBot - curY) > 35) {
+        const verdictH = Math.min(contentBot - curY - 2, 54);
+        doc.roundedRect(LEFT_X, curY, LEFT_W, verdictH, 3).fill('#eaf6f6');
+        doc.rect(LEFT_X, curY, 3, verdictH).fill(TEAL);
+        doc.fillColor(TEAL).font('Helvetica-Bold').fontSize(6.5)
+           .text('AI ANALYSIS SUMMARY', LEFT_X + 10, curY + 7, { characterSpacing: 1 });
+        doc.fillColor(DARK).font(fontRegular(verdictText)).fontSize(7.5)
+           .text(verdictText, LEFT_X + 10, curY + 18, { width: LEFT_W - 16, lineGap: 2 });
+      }
+
+      // ── Footer bar ─────────────────────────────────────────
+      const footerY = H - B - 10 - FOOTER_H;
+      doc.rect(B+10, footerY, W - (B+10)*2, FOOTER_H).fill('#1a2a3a');
+      doc.rect(B+10, footerY, W - (B+10)*2, 2).fill(GOLD);
+
+      // Footer columns
+      const fColW = (W - (B+10)*2 - 160) / 4;
+      const fStartX = B + 20;
+      [['SUBMITTED BY', authorName], ['INSTITUTION', displayInst], ['DATE ISSUED', dateStr], ['CERTIFICATE NO.', certRef]]
+        .forEach(([label, val], i) => {
+          const fx = fStartX + i * fColW;
+          doc.fillColor(GOLD_L).font('Helvetica').fontSize(6)
+             .text(label, fx, footerY + 8, { width: fColW - 6, characterSpacing: 1 });
+          doc.fillColor(WHITE).font('Helvetica-Bold').fontSize(7.5)
+             .text(val, fx, footerY + 18, { width: fColW - 6 });
+        });
+
+      // QR code + verify URL (right of footer)
+      const qrX = W - B - 10 - 148;
+      try {
+        const qrDataUrl = await QRCode.toDataURL(`https://origincheck.ng/verify?ref=${certRef}`, {
+          width: 56, margin: 1, color: { dark: '#ffffff', light: '#1a2a3a' }
+        });
+        const qrBuf = Buffer.from(qrDataUrl.split(',')[1], 'base64');
+        doc.image(qrBuf, qrX, footerY + 4, { width: 44, height: 44 });
+      } catch(e) { console.warn('QR generation failed:', e.message); }
+
+      doc.fillColor(GOLD_L).font('Helvetica').fontSize(6)
+         .text('VERIFY ONLINE', qrX + 50, footerY + 8, { characterSpacing: 1 });
+      doc.fillColor(WHITE).font('Helvetica').fontSize(6.5)
+         .text('origincheck.ng/verify', qrX + 50, footerY + 18);
+      doc.fillColor(GOLD_L).font('Helvetica').fontSize(6)
+         .text('?ref=' + certRef, qrX + 50, footerY + 28);
+      doc.fillColor('#9ca3af').font('Helvetica').fontSize(5.5)
+         .text('This certificate is digitally verified. Scan QR or visit the URL above.', qrX + 50, footerY + 40, { width: 90 });
 
       doc.end();
-    } catch (e) { reject(e); }
+    } catch(e) { reject(e); }
   });
 }
+
 
 // ── ADMIN ─────────────────────────────────────────────────
 app.get('/api/admin/stats', auth, async (req, res) => {
