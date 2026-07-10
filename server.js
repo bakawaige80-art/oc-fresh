@@ -207,7 +207,40 @@ async function initDB() {
 
 // ── App ───────────────────────────────────────────────────
 const app = express();
-app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
+// ── PAYSTACK WEBHOOK — must be raw BEFORE express.json() ──
+// Paystack sends raw body for HMAC verification
+app.post('/api/payment/webhook', express.raw({ type: '*/*' }), async (req, res) => {
+  try {
+    // Always respond 200 immediately so Paystack does not retry
+    res.sendStatus(200);
+
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+    const hash = crypto.createHmac('sha512', PAYSTACK_KEY).update(rawBody).digest('hex');
+    const sig  = req.headers['x-paystack-signature'];
+
+    if (!sig || hash !== sig) {
+      console.error('Webhook: bad signature — ignoring. Expected:', hash, 'Got:', sig);
+      return;
+    }
+
+    const ev = JSON.parse(rawBody.toString());
+    console.log('Webhook event received:', ev.event, ev.data?.reference);
+
+    if (ev.event === 'charge.success') {
+      const ref = ev.data?.reference;
+      if (ref) {
+        const ok = await verifyPaystack(ref).catch(e => {
+          console.error('Webhook verifyPaystack failed for ref', ref, ':', e.message);
+          return false;
+        });
+        console.log('Webhook payment verification result:', ok, 'for ref:', ref);
+      }
+    }
+  } catch(e) {
+    console.error('Webhook error:', e.message);
+  }
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Allow requests from Vercel frontend and local dev
@@ -369,16 +402,6 @@ app.get('/api/payment/verify/:ref', auth, async (req, res) => {
   } catch { res.status(500).json({ error: 'Verification failed.' }); }
 });
 
-app.post('/api/payment/webhook', (req, res) => {
-  try {
-    const hash = crypto.createHmac('sha512', PAYSTACK_KEY).update(req.body).digest('hex');
-    if (hash !== req.headers['x-paystack-signature']) return res.status(401).send('Bad signature');
-    const ev = JSON.parse(req.body.toString());
-    if (ev.event === 'charge.success') verifyPaystack(ev.data.reference).catch(console.error);
-    res.sendStatus(200);
-  } catch { res.sendStatus(200); }
-});
-
 app.get('/api/payment/history', auth, async (req, res) => {
   try {
     const rows = await db.all('SELECT id,plan,amount,reference,status,created_at FROM payments WHERE user_id=$1 ORDER BY created_at DESC', [req.user.id]);
@@ -387,46 +410,78 @@ app.get('/api/payment/history', auth, async (req, res) => {
 });
 
 async function verifyPaystack(reference) {
-  if (!PAYSTACK_KEY || !reference) return false;
+  if (!PAYSTACK_KEY || !reference) {
+    console.error('verifyPaystack: missing key or reference');
+    return false;
+  }
+
   const r = await fetch(`https://api.paystack.co/transaction/verify/${reference}`,
     { headers: { Authorization: `Bearer ${PAYSTACK_KEY}` } });
   const data = await r.json();
-  if (data.status && data.data.status === 'success') {
-    const { user_id, plan } = data.data.metadata || {};
-    const pl = PLANS[plan];
-    if (!pl || !user_id) return false;
-    const exp = new Date(); exp.setDate(exp.getDate() + 30);
-    await db.run('UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,gptzero_limit=$3,gptzero_used=0,sub_expires=$4 WHERE id=$5',
-      [plan, pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), user_id]);
+
+  console.log('Paystack verify response for', reference, ':', data.data?.status, '| metadata:', JSON.stringify(data.data?.metadata));
+
+  if (!data.status || data.data?.status !== 'success') {
+    console.warn('Paystack: payment not successful for ref', reference, '— status:', data.data?.status);
+    return false;
+  }
+
+  const { user_id, plan } = data.data.metadata || {};
+  const pl = PLANS[plan];
+
+  if (!pl) {
+    console.error('verifyPaystack: unknown plan in metadata:', plan);
+    return false;
+  }
+  if (!user_id) {
+    console.error('verifyPaystack: no user_id in metadata for ref', reference);
+    return false;
+  }
+
+  const exp = new Date();
+  exp.setDate(exp.getDate() + 30);
+
+  // Update user subscription
+  const updateResult = await db.run(
+    'UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,gptzero_limit=$3,gptzero_used=0,sub_expires=$4 WHERE id=$5',
+    [plan, pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), user_id]
+  );
+  console.log('User subscription updated for user_id:', user_id, '— plan:', plan, '— rows affected:', updateResult?.changes);
+
+  // Update payment record — upsert in case webhook fires before callback creates the row
+  const existingPayment = await db.get('SELECT id FROM payments WHERE reference=$1', [reference]);
+  if (existingPayment) {
     await db.run('UPDATE payments SET status=$1,paystack_id=$2 WHERE reference=$3',
       ['success', String(data.data.id), reference]);
-
-    // Credit affiliate commission if this user was referred
-    try {
-      const referredUser = await db.get('SELECT referred_by FROM users WHERE id=$1', [user_id]);
-      if (referredUser && referredUser.referred_by) {
-        const affId = referredUser.referred_by;
-        const commRate = COMMISSION[plan] || 0;
-        const commAmount = Math.floor(PLANS[plan].price * commRate); // in kobo
-        if (commAmount > 0) {
-          // Create referral record
-          await db.run(
-            'INSERT INTO referrals (id,affiliate_id,referred_user_id,plan,commission,status) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
-            [uuidv4(), affId, user_id, plan, commAmount, 'pending']
-          );
-          // Update affiliate totals
-          await db.run(
-            'UPDATE affiliates SET total_referrals=total_referrals+1, total_earnings=total_earnings+$1, pending_earnings=pending_earnings+$1 WHERE id=$2',
-            [commAmount, affId]
-          );
-          console.log(`Affiliate ${affId} earned ${commAmount} kobo for ${plan} referral`);
-        }
-      }
-    } catch (e) { console.error('Affiliate commission error:', e); }
-
-    return true;
+  } else {
+    // Webhook fired before our callback created the row — create it now
+    await db.run('INSERT INTO payments (id,user_id,plan,amount,reference,status,paystack_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [uuidv4(), user_id, plan, data.data.amount, reference, 'success', String(data.data.id)]);
+    console.log('Payment row created from webhook for ref:', reference);
   }
-  return false;
+
+  // Credit affiliate commission if this user was referred
+  try {
+    const referredUser = await db.get('SELECT referred_by FROM users WHERE id=$1', [user_id]);
+    if (referredUser?.referred_by) {
+      const affId = referredUser.referred_by;
+      const commRate = COMMISSION[plan] || 0;
+      const commAmount = Math.floor(PLANS[plan].price * commRate);
+      if (commAmount > 0) {
+        await db.run(
+          'INSERT INTO referrals (id,affiliate_id,referred_user_id,plan,commission,status) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
+          [uuidv4(), affId, user_id, plan, commAmount, 'pending']
+        );
+        await db.run(
+          'UPDATE affiliates SET total_referrals=total_referrals+1, total_earnings=total_earnings+$1, pending_earnings=pending_earnings+$1 WHERE id=$2',
+          [commAmount, affId]
+        );
+        console.log(`Affiliate ${affId} earned ${commAmount} for ${plan} referral`);
+      }
+    }
+  } catch(e) { console.error('Affiliate commission error:', e.message); }
+
+  return true;
 }
 
 // ── FILE UPLOAD ───────────────────────────────────────────
