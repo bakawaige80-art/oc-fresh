@@ -2379,6 +2379,25 @@ function Admin({ go }) {
 
         <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, overflow:'auto' }}>
           {tab==='payments'&&(
+            <div>
+              {/* Manual payment fix tool */}
+              <div style={{ padding:'1rem 1rem .5rem', background:'#fffbf0', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap' }}>
+                <div style={{ fontSize:'.82rem', color:C.ink, fontWeight:600 }}>🔧 Fix stuck payment:</div>
+                <input id="fixRef" placeholder="Paste Paystack reference e.g. oc_abc123..."
+                  style={{ flex:1, minWidth:220, background:C.white, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.45rem .75rem', fontSize:'.82rem', outline:'none' }}/>
+                <button onClick={async()=>{
+                  const ref = document.getElementById('fixRef').value.trim();
+                  if (!ref) return;
+                  try {
+                    const d = await af('/api/admin/fix-payment', { method:'POST', body:{ reference: ref }});
+                    alert(d.message);
+                    if (d.success) { const s = await af('/api/admin/stats'); setStats(s); }
+                  } catch(e) { alert('Error: ' + e.message); }
+                }} style={{ background:C.teal, color:C.white, border:'none', borderRadius:2, padding:'.45rem 1rem', fontSize:'.82rem', fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+                  Verify & Activate
+                </button>
+                <div style={{ fontSize:'.72rem', color:C.muted }}>Use this if a user paid but their plan was not activated</div>
+              </div>
             <table style={{ width:'100%', borderCollapse:'collapse' }}>
               <thead><tr style={{ background:C.ink }}>
                 {['User','Email','Plan','Amount','Status','Date'].map(h=><th key={h} style={{ padding:'.75rem 1rem', textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:'.7rem', color:C.gold, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:600, whiteSpace:'nowrap' }}>{h}</th>)}
@@ -2397,6 +2416,7 @@ function Admin({ go }) {
                 {stats.recentPayments.length===0&&<tr><td colSpan={6} style={{ padding:'2rem', textAlign:'center', color:C.muted }}>No payments yet</td></tr>}
               </tbody>
             </table>
+            </div>
           )}
           {tab==='users'&&(
             <table style={{ width:'100%', borderCollapse:'collapse' }}>
