@@ -36,29 +36,32 @@ const ADMIN_NAME  = process.env.ADMIN_NAME  || 'OriginCheck Team';
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PAYSTACK_KEY  = process.env.PAYSTACK_SECRET_KEY || '';
 const APP_URL     = process.env.APP_URL || 'http://localhost:3001';
-const RESEND_KEY  = process.env.RESEND_API_KEY || '';
+const BREVO_KEY   = process.env.BREVO_API_KEY || process.env.RESEND_API_KEY || '';
 const FROM_EMAIL  = process.env.FROM_EMAIL || 'noreply@origincheck.ng';
-const GPTZERO_KEY     = process.env.GPTZERO_API_KEY || '';
+const GPTZERO_KEY = process.env.GPTZERO_API_KEY || '';
 
-// Send email via Resend HTTP API (no npm package needed)
+// ── Send email via Brevo (formerly Sendinblue) ─────────────
+// Free: 300 emails/day forever. No npm package — pure HTTP.
+// Sign up at brevo.com → SMTP & API → API Keys → Create
 async function sendEmail({ to, subject, html, text }) {
-  if (!RESEND_KEY) throw new Error('RESEND_API_KEY not configured.');
-  const r = await fetch('https://api.resend.com/emails', {
+  if (!BREVO_KEY) throw new Error('Email not configured. Add BREVO_API_KEY to environment variables.');
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${RESEND_KEY}`,
+      'api-key': BREVO_KEY,
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
     },
     body: JSON.stringify({
-      from: `${ADMIN_NAME} <${FROM_EMAIL}>`,
-      to: Array.isArray(to) ? to : [to],
+      sender:   { name: ADMIN_NAME || 'OriginCheck', email: FROM_EMAIL },
+      to:       Array.isArray(to) ? to.map(e => ({ email: e })) : [{ email: to }],
       subject,
-      html,
-      text,
+      htmlContent: html,
+      textContent: text,
     }),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.message || data.name || 'Email send failed');
+  if (!r.ok) throw new Error(data.message || JSON.stringify(data) || 'Email send failed');
   return data;
 }
 
@@ -1609,7 +1612,7 @@ app.post('/api/admin/email-send', auth, async (req, res) => {
   const { segment, subject, body, personalise } = req.body;
   if (!subject || !body) return res.status(400).json({ error: 'Subject and body are required.' });
 
-  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY to your environment variables.' });
+  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add BREVO_API_KEY to environment variables.' });
 
   try {
     // Get target users
@@ -1675,7 +1678,7 @@ app.post('/api/admin/email-test', auth, async (req, res) => {
   if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
 
   const { subject, body } = req.body;
-  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY.' });
+  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add BREVO_API_KEY.' });
 
   try {
     const html = buildEmailHTML(subject || 'Test Email', body || 'This is a test email from OriginCheck admin.', 'Admin');
@@ -1859,7 +1862,7 @@ function validateEnv() {
   console.log('Database:', process.env.DATABASE_URL ? 'configured' : 'MISSING');
   console.log('Anthropic:', process.env.ANTHROPIC_API_KEY ? 'configured' : 'not set');
   console.log('Paystack:', process.env.PAYSTACK_SECRET_KEY ? 'configured' : 'not set');
-  console.log('Resend:', process.env.RESEND_API_KEY ? 'configured' : 'not set');
+  console.log('Brevo email:', process.env.BREVO_API_KEY ? 'configured' : 'not set (add BREVO_API_KEY)');
 }
 
 process.on('uncaughtException', err => {
