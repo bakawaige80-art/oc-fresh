@@ -94,10 +94,18 @@ async function apiFetch(url, opts = {}, token) {
     headers['Content-Type'] = 'application/json';
     opts = { ...opts, body: JSON.stringify(opts.body) };
   }
-  // Prepend API base URL so Vercel frontend can reach Railway backend
-  const res  = await fetch(API + url, { ...opts, headers });
+  const res = await fetch(API + url, { ...opts, headers });
+
+  // Handle non-JSON responses (HTML error pages, plain text) gracefully
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Server error (${res.status}). Please try again or contact support.`);
+    return text;
+  }
+
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
   return data;
 }
 
@@ -2641,7 +2649,7 @@ function Admin({ go }) {
 
               {/* Setup notice */}
               <div style={{ marginTop:'1.5rem', background:'#fffbe8', border:`1px solid ${C.gold}`, borderRadius:3, padding:'1rem 1.25rem', fontSize:'.82rem', color:C.muted, lineHeight:1.7 }}>
-                <strong style={{ color:C.ink }}>⚙️ Setup required:</strong> Add <code style={{ background:'#f0f0f0', padding:'.1rem .3rem', borderRadius:2 }}>RESEND_API_KEY</code> and <code style={{ background:'#f0f0f0', padding:'.1rem .3rem', borderRadius:2 }}>FROM_EMAIL</code> to your Render environment variables. Get a free API key at <strong>resend.com</strong> (3,000 emails/month free).
+                <strong style={{ color:C.ink }}>⚙️ Setup required:</strong> Add <code style={{ background:'#f0f0f0', padding:'.1rem .3rem', borderRadius:2 }}>BREVO_API_KEY</code> and <code style={{ background:'#f0f0f0', padding:'.1rem .3rem', borderRadius:2 }}>FROM_EMAIL</code> to your Render environment variables. Get a free API key at <strong>brevo.com</strong> (300 emails/day free forever).
               </div>
             </div>
           )}

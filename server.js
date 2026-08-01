@@ -1614,7 +1614,7 @@ app.post('/api/admin/email-send', auth, async (req, res) => {
   const { segment, subject, body, personalise } = req.body;
   if (!subject || !body) return res.status(400).json({ error: 'Subject and body are required.' });
 
-  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add BREVO_API_KEY to environment variables.' });
+  if (!BREVO_KEY) return res.status(500).json({ error: 'Email service not configured. Add BREVO_API_KEY to environment variables.' });
 
   try {
     // Get target users
@@ -1680,7 +1680,7 @@ app.post('/api/admin/email-test', auth, async (req, res) => {
   if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
 
   const { subject, body } = req.body;
-  if (!RESEND_KEY) return res.status(500).json({ error: 'Email service not configured. Add BREVO_API_KEY.' });
+  if (!BREVO_KEY) return res.status(500).json({ error: 'Email service not configured. Add BREVO_API_KEY.' });
 
   try {
     const html = buildEmailHTML(subject || 'Test Email', body || 'This is a test email from OriginCheck admin.', 'Admin');
