@@ -45,6 +45,7 @@ const GPTZERO_KEY = process.env.GPTZERO_API_KEY || '';
 // Sign up at brevo.com → SMTP & API → API Keys → Create
 async function sendEmail({ to, subject, html, text }) {
   if (!BREVO_KEY) throw new Error('Email not configured. Add BREVO_API_KEY to environment variables.');
+  const replyTo = process.env.REPLY_TO_EMAIL || ADMIN_EMAIL || FROM_EMAIL;
   const r = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
@@ -53,8 +54,9 @@ async function sendEmail({ to, subject, html, text }) {
       'Accept': 'application/json',
     },
     body: JSON.stringify({
-      sender:   { name: ADMIN_NAME || 'OriginCheck', email: FROM_EMAIL },
-      to:       Array.isArray(to) ? to.map(e => ({ email: e })) : [{ email: to }],
+      sender:      { name: ADMIN_NAME || 'OriginCheck', email: FROM_EMAIL },
+      to:          Array.isArray(to) ? to.map(e => ({ email: e })) : [{ email: to }],
+      replyTo:     { email: replyTo },
       subject,
       htmlContent: html,
       textContent: text,
