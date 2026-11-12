@@ -853,73 +853,62 @@ Rules:
 });
 
 // ── HUMANISER ─────────────────────────────────────────────
-async function runHumanisePass(text, styleDesc, pass) {
+async function runParaphrasePass(text, styleDesc, pass) {
   const passInstructions = pass === 1 ? `
-PASS 1 — STRUCTURAL TRANSFORMATION:
-- Completely restructure sentence order within each paragraph
-- Split long compound sentences into 2–3 shorter ones
-- Merge some short sentences into one flowing sentence
-- Replace EVERY instance of: furthermore, moreover, additionally, consequently, 
-  subsequently, nevertheless, notwithstanding, henceforth, thereof
-- Rewrite the opening sentence of EVERY paragraph — make each one unique in structure
-- Add 1–2 personal hedging phrases per paragraph: "it seems", "one might argue", 
-  "interestingly", "it is worth noting", "this suggests"
-- Introduce occasional incomplete thoughts completed in the next sentence
+PASS 1 — SENTENCE-LEVEL PARAPHRASING:
+Your job is to rewrite every sentence using completely different words while
+keeping the exact same meaning. Think of this as translating English to English.
+
+- Replace every key phrase with a synonym or alternative expression
+- Change passive voice to active and vice versa where it improves clarity
+- Restructure sentences — if the original puts the main point at the end, put it at the beginning
+- Break long sentences into two shorter ones where natural
+- Combine two short sentences into one where it flows better
+- Change the opening word of every sentence so no two consecutive sentences start the same way
+- Replace transitional words (furthermore, moreover, additionally) with different connectors
 ` : pass === 2 ? `
-PASS 2 — VOICE AND RHYTHM TRANSFORMATION:
-- Read what you produced and identify any remaining robotic patterns
-- Vary sentence LENGTH dramatically — some should be under 10 words, some over 30
-- Add specific concrete examples where abstract statements exist
-- Insert natural parenthetical asides (like this one) where appropriate
-- Use contractions in at least 30% of sentences where grammatically natural
-- Make the opening of the text feel like a human starting to explain something
-- Ensure no two consecutive sentences start with the same word
-- Add one or two rhetorical questions where they fit naturally
-- The final output must feel like it was written by a thoughtful, intelligent human
-  who knows their subject well but writes naturally, not a language model
+PASS 2 — ACADEMIC STYLE REFINEMENT:
+Refine the paraphrase to match the target style and improve clarity.
+
+- Ensure the writing matches this style target: ${styleDesc}
+- Improve sentence variety — mix short punchy sentences with longer explanatory ones
+- Ensure the paraphrase makes the same claims with equal or greater clarity
+- Strengthen weak language — replace vague words with precise academic terms
+- Preserve ALL technical terms, proper nouns, statistics, and citations EXACTLY
+- The output should read as polished academic prose
 ` : `
-PASS 3 — AI PATTERN SCRUBBER (final cleanup pass):
-You are now hunting for the specific tells that AI detectors are trained to catch. Go through the text and aggressively eliminate:
-- Em-dash overuse — replace most em-dashes with commas, periods, or parentheses instead
-- The phrase patterns "it's important to note", "it's worth noting", "in conclusion",
-  "overall", "in summary", "this highlights", "this underscores", "plays a crucial role",
-  "serves as a", "stands as a testament" — remove or replace every single one
-- Perfectly parallel sentence structures (e.g. three sentences in a row with identical
-  grammatical shape) — break the pattern by making one noticeably different
-- Triplet lists ("X, Y, and Z" appearing repeatedly as a stylistic crutch) — vary how
-  lists are presented, sometimes just describe items in prose instead
-- Overly balanced "on one hand / on the other hand" framing — humans rarely hedge this
-  symmetrically
-- Generic intensifiers like "significantly", "substantially", "considerably" used
-  more than once — replace with specific detail instead
-- Check that the piece doesn't end on a neat, tidy, summarizing final sentence —
-  humans often trail off on a specific point, a small caveat, or an example instead
-  of wrapping everything in a bow
-This is a precision edit, not a rewrite — keep everything that already reads naturally
-and only fix what still sounds machine-generated.
+PASS 3 — ORIGINALITY AND FLOW POLISH:
+Final pass — ensure the paraphrase is genuinely distinct and flows naturally.
+
+- Identify any phrases still too close to the original wording — rephrase them
+- Ensure paragraph transitions flow naturally
+- Vary the rhythm — some ideas move quickly, others should breathe
+- Remove any accidental word repetition within the same paragraph
+- The final output must be genuinely original in expression while completely
+  faithful to the source material in meaning and argument
 `;
 
-  const prompt = `You are a world-class academic ghostwriter specialising in making AI-generated text completely undetectable. Your rewrites fool even the most advanced AI detection systems including GPTZero, Turnitin AI, and Originality.ai.
+  const prompt = `You are an expert academic paraphrasing assistant. Help researchers rewrite text in their own words — preserving meaning completely while using entirely different phrasing. This is a legitimate academic skill used to avoid plagiarism and improve clarity.
 
 STYLE TARGET: ${styleDesc}
 
-TEXT TO REWRITE:
+TEXT TO PARAPHRASE:
 """
 ${text.slice(0, 4000)}
 """
 
 ${passInstructions}
 
-ABSOLUTE RULES — violating any of these makes the output useless:
-- Preserve ALL factual content, data, citations, and technical terminology EXACTLY
-- Do NOT add new information or claims not in the original
-- Do NOT remove key points or arguments
-- The academic quality must be EQUAL TO OR BETTER than the original
-- Output length should be similar to input length (within 20%)
-- Do NOT include any explanation, label, or preamble — output the rewritten text ONLY
-- Start writing immediately with the first word of the rewritten text
+ABSOLUTE RULES:
+1. Preserve ALL factual content, arguments, data, and conclusions exactly
+2. Keep ALL citations, references, statistics, proper nouns, and technical terms unchanged
+3. Do NOT add any new information not in the original
+4. Do NOT remove any key points
+5. Output length should be similar to input (within 15%)
+6. Output the paraphrased text ONLY — no labels, no explanations, no preamble
+7. Begin immediately with the first word of the paraphrased text
 
-REWRITE NOW:`;
+PARAPHRASE NOW:`;
 
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -929,9 +918,9 @@ REWRITE NOW:`;
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: pass === 2 ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001',  // Sonnet for voice pass, Haiku for structural passes
+      model: pass === 2 ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001',
       max_tokens: 4096,
-      temperature: 1,   // max creativity for more varied output
+      temperature: 0.8,
       messages: [{ role: 'user', content: prompt }]
     }),
   });
@@ -941,24 +930,23 @@ REWRITE NOW:`;
   return data.content.map(b => b.text || '').join('').trim();
 }
 
-// Quick AI-detection self-check used after humanising, to verify the result
-// and flag any sentences that still read as AI-generated.
-async function quickAIDetectionCheck(text) {
-  const prompt = `Score this text for how likely it is to be flagged as AI-generated by a detector (0-100, where 0=definitely human, 100=definitely AI). Also list up to 3 specific sentences (quoted exactly from the text) that still sound the most AI-like, if any.
+// Quick similarity check after paraphrasing
+async function quickSimilarityCheck(original, paraphrased) {
+  const prompt = `Compare these two texts. Estimate how similar they are in wording (0-100, where 0=completely different words, 100=identical). List up to 3 phrases from the paraphrase still too close to the original.
 
-TEXT:
-"${text.slice(0, 3000)}"
+ORIGINAL: "${original.slice(0, 1200)}"
+PARAPHRASE: "${paraphrased.slice(0, 1200)}"
 
-Reply ONLY with JSON: {"aiScore":0,"flaggedSentences":["sentence one if any"]}`;
-
-  return callAI(prompt, 600).catch(() => ({ aiScore: null, flaggedSentences: [] }));
+Reply ONLY with JSON: {"similarityScore":0,"closeMatches":["phrase if any"]}`;
+  return callAI(prompt, 500).catch(() => ({ similarityScore: null, closeMatches: [] }));
 }
 
-app.post('/api/humanise', auth, async (req, res) => {
+
+app.post('/api/paraphrase', auth, async (req, res) => {
   try {
     const { text, style } = req.body;
     if (!text || text.trim().length < 20)
-      return res.status(400).json({ error: 'Please provide some text to humanise.' });
+      return res.status(400).json({ error: 'Please provide some text to paraphrase.' });
     if (!ANTHROPIC_KEY)
       return res.status(500).json({ error: 'AI service not configured.' });
 
@@ -979,57 +967,58 @@ app.post('/api/humanise', auth, async (req, res) => {
       });
 
     const styles = {
-      academic: 'formal academic writing with natural scholarly voice — the kind a senior Nigerian researcher would write',
-      casual:   'warm and conversational — knowledgeable but approachable, like explaining to a colleague over coffee',
-      student:  'bright university student — intelligent arguments, some contractions, slightly informal at times, personal perspective',
-      balanced: 'professional Nigerian academic — clear, confident, authoritative but clearly written by a person not a machine',
+      academic:   'formal academic writing — precise, scholarly, suitable for journal submission',
+      simplified: 'clear and simplified — accessible language without sacrificing accuracy, suitable for a wider audience',
+      concise:    'concise and direct — shorter sentences, no filler words, every word earns its place',
+      formal:     'highly formal — professional tone, third person, appropriate for official reports and theses',
     };
-    const styleDesc = styles[style] || styles.balanced;
+    const styleDesc = styles[style] || styles.academic;
 
     // Helper to run a pass with a timeout safety net
     const runPassSafe = async (inputText, passNum, timeoutMs = 25000) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const result = await runHumanisePass(inputText, styleDesc, passNum);
+        const result = await runParaphrasePass(inputText, styleDesc, passNum);
         clearTimeout(timer);
-        return result || inputText; // fallback to input if pass returns empty
+        return result || inputText;
       } catch(e) {
         clearTimeout(timer);
         console.warn(`Pass ${passNum} failed: ${e.message} — using input text`);
-        return inputText; // gracefully fall back to previous pass output
+        return inputText;
       }
     };
 
-    // ── Three-pass humanisation ────────────────────────────
-    console.log('Humanise pass 1 starting...');
+    // ── Three-pass paraphrasing ────────────────────────────
+    console.log('Paraphrase pass 1 starting...');
     const pass1 = await runPassSafe(text, 1);
 
-    console.log('Humanise pass 2 starting...');
+    console.log('Paraphrase pass 2 starting...');
     const pass2 = await runPassSafe(pass1, 2);
 
-    console.log('Humanise pass 3 starting...');
-    const humanised = await runPassSafe(pass2, 3);
+    console.log('Paraphrase pass 3 starting...');
+    const paraphrased = await runPassSafe(pass2, 3);
 
-    if (!humanised || humanised.trim().length < 20)
-      return res.status(502).json({ error: 'No output received. Please try again.' });
+    if (!paraphrased || paraphrased.trim().length < 20)
+      return res.status(502).json({ error: 'No paraphrase output received. Please try again.' });
 
-    // ── Self-check ─────────────────────────────────────────
-    const selfCheck = await quickAIDetectionCheck(humanised).catch(() => ({ aiScore: null, flaggedSentences: [] }));
+    // ── Similarity self-check — shows how different from original ──
+    const simCheck = await quickSimilarityCheck(text, paraphrased)
+      .catch(() => ({ similarityScore: null, closeMatches: [] }));
 
     await db.run('UPDATE users SET checks_used=checks_used+1 WHERE id=$1', [req.user.id]);
 
     res.json({
-      humanised,
-      originalLength: text.length,
-      humanisedLength: humanised.length,
-      passes: 3,
-      selfCheckScore: selfCheck.aiScore,
-      stillFlagged: selfCheck.flaggedSentences || [],
+      paraphrased,
+      originalLength:     text.length,
+      paraphrasedLength:  paraphrased.length,
+      passes:             3,
+      similarityScore:    simCheck.similarityScore,
+      closeMatches:       simCheck.closeMatches || [],
     });
   } catch (e) {
-    console.error('Humanise error:', e.message);
-    res.status(500).json({ error: 'Humanisation failed. Please try again.' });
+    console.error('Paraphrase error:', e.message);
+    res.status(500).json({ error: 'Paraphrasing failed. Please try again.' });
   }
 });
 
@@ -1886,7 +1875,7 @@ initDB()
       console.log(`OriginCheck running on port ${PORT}`);
       startKeepAlive();
     });
-    // Increase timeout to 120s for long-running humaniser (3 passes) requests
+    // Increase timeout to 120s for long-running paraphraser (3 passes) requests
     server.timeout = 120000;
     server.keepAliveTimeout = 120000;
   })
