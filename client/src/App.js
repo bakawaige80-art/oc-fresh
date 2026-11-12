@@ -171,7 +171,7 @@ function Navbar({ page, go }) {
               <button onClick={()=>nav('home')} style={{ background:'none', border:'none', color:page==='home'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>Home</button>
               <button onClick={()=>nav('dash')} style={{ background:'none', border:'none', color:page==='dash'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>Dashboard</button>
               <button onClick={()=>nav('history')} style={{ background:'none', border:'none', color:page==='history'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>History</button>
-              <button onClick={()=>nav('humanise')} style={{ background:'none', border:'none', color:page==='humanise'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>✍️ Humanise</button>
+              <button onClick={()=>nav('paraphrase')} style={{ background:'none', border:'none', color:page==='paraphrase'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>✍️ Paraphrase</button>
               <button onClick={()=>nav('affiliate')} style={{ background:'none', border:'none', color:page==='affiliate'?C.gold:'#e8d48a', fontSize:'.82rem', fontWeight:600, textTransform:'uppercase', letterSpacing:'.06em' }}>💰 Earn</button>
               <button onClick={()=>nav('ambassador')} style={{ background:'none', border:'none', color:page==='ambassador'?C.gold:'#9ca3af', fontSize:'.82rem', fontWeight:500, textTransform:'uppercase', letterSpacing:'.06em' }}>🎖️ Ambassador</button>
               <button onClick={()=>nav('subscribe')} style={{ background:user.plan==='none'?C.gold:user.plan==='free'?C.teal:'none', border:'none', color:user.plan==='none'||user.plan==='free'?C.white:'#9ca3af', fontSize:'.82rem', fontWeight:user.plan==='none'||user.plan==='free'?700:500, textTransform:'uppercase', letterSpacing:'.06em', padding:(user.plan==='none'||user.plan==='free')?'.4rem .9rem':0, borderRadius:2 }}>
@@ -212,7 +212,7 @@ function Navbar({ page, go }) {
           ) : (
             <>
               <div style={{ color:C.gold, fontSize:'.82rem', fontWeight:600, padding:'.25rem 0' }}>Signed in as {user.name}</div>
-              {[['home','🏠 Home'],['dash','📊 Dashboard'],['history','📋 History'],['humanise','✍️ Humanise Text'],['affiliate','💰 Earn Commission'],['ambassador','🎖️ Ambassador Programme'],['subscribe','💳 Plans']].map(([p,l])=>(
+              {[['home','🏠 Home'],['dash','📊 Dashboard'],['history','📋 History'],['paraphrase','✍️ Paraphraser'],['affiliate','💰 Earn Commission'],['ambassador','🎖️ Ambassador Programme'],['subscribe','💳 Plans']].map(([p,l])=>(
                 <button key={p} onClick={()=>nav(p)} style={{ background:'none', border:'none', color:page===p?C.gold:'#e5e7eb', fontSize:'.92rem', textAlign:'left', padding:'.6rem 0', borderBottom:`1px solid #2a3040`, fontWeight:page===p?600:400 }}>{l}</button>
               ))}
               {user.is_admin && <button onClick={()=>nav('admin')} style={{ background:'none', border:'none', color:'#e0b030', fontSize:'.92rem', textAlign:'left', padding:'.6rem 0', borderBottom:`1px solid #2a3040`, fontWeight:700 }}>⚙️ Admin Dashboard</button>}
@@ -1303,8 +1303,8 @@ function Subscribe({ go }) {
   );
 }
 
-// ── HUMANISER ────────────────────────────────────────────
-function Humaniser({ go }) {
+// ── PARAPHRASER ──────────────────────────────────────────
+function Paraphraser({ go }) {
   const { user, setUser, af } = useAuth();
   const [inputText, setInputText]         = useState('');
   const [outputText, setOutputText]       = useState('');
@@ -1315,8 +1315,8 @@ function Humaniser({ go }) {
   const [copied, setCopied]               = useState(false);
   const [extracting, setExtracting]       = useState(false);
   const [fname, setFname]                 = useState('');
-  const [selfCheckScore, setSelfCheckScore] = useState(null);
-  const [stillFlagged, setStillFlagged]   = useState([]);
+  const [similarityScore, setSimilarityScore] = useState(null);
+  const [closeMatches, setCloseMatches]   = useState([]);
   const fileRef                           = useRef(null);
 
   const noSub   = !user || user.plan === 'none';
@@ -1336,19 +1336,19 @@ function Humaniser({ go }) {
     finally { setExtracting(false); }
   };
 
-  const humanise = async () => {
+  const paraphrase = async () => {
     if (!inputText.trim()) return;
     setLoading(true); setErr(''); setOutputText('');
-    setLoadingMsg('Pass 1 of 3 — Restructuring sentences and paragraphs…');
+    setLoadingMsg('Pass 1 of 3 — Rewriting sentences…');
     try {
-      const t1 = setTimeout(() => setLoadingMsg('Pass 2 of 3 — Refining voice and rhythm…'), 14000);
-      const t2 = setTimeout(() => setLoadingMsg('Pass 3 of 3 — Scrubbing AI patterns…'), 28000);
-      const t3 = setTimeout(() => setLoadingMsg('Running self-check on output…'), 42000);
-      const d = await af('/api/humanise', { method:'POST', body:{ text: inputText, style } });
+      const t1 = setTimeout(() => setLoadingMsg('Pass 2 of 3 — Refining style and clarity…'), 14000);
+      const t2 = setTimeout(() => setLoadingMsg('Pass 3 of 3 — Polishing and finalising…'), 28000);
+      const t3 = setTimeout(() => setLoadingMsg('Running similarity check…'), 42000);
+      const d = await af('/api/paraphrase', { method:'POST', body:{ text: inputText, style } });
       clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
-      setOutputText(d.humanised);
-      setSelfCheckScore(d.selfCheckScore ?? null);
-      setStillFlagged(d.stillFlagged || []);
+      setOutputText(d.paraphrased);
+      setSimilarityScore(d.similarityScore ?? null);
+      setCloseMatches(d.closeMatches || []);
       const me = await af('/api/auth/me'); setUser(me.user);
     } catch(e) {
       setErr(e.message);
@@ -1363,34 +1363,34 @@ function Humaniser({ go }) {
   const downloadTxt = () => {
     const blob = new Blob([outputText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='humanised-text.txt'; a.click();
+    const a = document.createElement('a'); a.href=url; a.download='paraphrased-text.txt'; a.click();
     URL.revokeObjectURL(url);
   };
 
   const wordCount = t => t.trim() ? t.trim().split(/\s+/).length : 0;
 
   const styles = [
-    { key:'balanced',  label:'Balanced',  desc:'Professional yet natural — best for most academic submissions' },
-    { key:'academic',  label:'Academic',  desc:'Scholarly tone with natural human voice and variation' },
-    { key:'student',   label:'Student',   desc:'Intelligent but with natural student writing patterns' },
-    { key:'casual',    label:'Casual',    desc:'Conversational and warm — for blogs or informal writing' },
+    { key:'academic',   label:'Academic',   desc:'Formal scholarly tone — suitable for theses, journals, and research papers' },
+    { key:'simplified', label:'Simplified', desc:'Clear and accessible — same meaning in simpler language for wider audiences' },
+    { key:'concise',    label:'Concise',    desc:'Shorter and more direct — removes filler, every word earns its place' },
+    { key:'formal',     label:'Formal',     desc:'Highly formal — third person, professional, for official reports and theses' },
   ];
 
   return (
     <div style={{ minHeight:'100vh', background:C.paper, paddingTop:'5rem' }}>
       {/* Header */}
       <div style={{ background:C.ink, padding:'3rem 2rem', textAlign:'center' }}>
-        <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.gold, textTransform:'uppercase', letterSpacing:'.2em', marginBottom:'1rem' }}>AI Text Humaniser</div>
-        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'2.2rem', fontWeight:900, color:C.white, marginBottom:'.75rem' }}>Make AI Text Sound Human</div>
+        <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.gold, textTransform:'uppercase', letterSpacing:'.2em', marginBottom:'1rem' }}>Academic Paraphraser</div>
+        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'2.2rem', fontWeight:900, color:C.white, marginBottom:'.75rem' }}>Paraphrase Your Text in Seconds</div>
         <div style={{ color:'#9ca3af', maxWidth:560, margin:'0 auto', lineHeight:1.8, fontSize:'.9rem' }}>
-          Paste AI-generated text and get a natural, human-sounding version that preserves your original meaning while removing AI detection patterns.
+          Paste any text and get a fully paraphrased version that preserves your original meaning while using entirely different wording — reducing similarity scores and improving originality.
         </div>
       </div>
 
       {/* How it works strip */}
       <div style={{ background:C.cream, borderBottom:`1px solid ${C.border}`, padding:'1rem 2rem' }}>
         <div style={{ maxWidth:860, margin:'0 auto', display:'flex', gap:'2rem', justifyContent:'center', flexWrap:'wrap' }}>
-          {[['1️⃣','Paste or upload your AI text'],['2️⃣','Choose your writing style'],['3️⃣','Get a natural human version'],['4️⃣','Re-run AI detection to verify']].map(([n,t])=>(
+          {[['1️⃣','Paste or upload your text'],['2️⃣','Choose your writing style'],['3️⃣','Get a fully paraphrased version'],['4️⃣','Run plagiarism check to verify']].map(([n,t])=>(
             <div key={t} style={{ display:'flex', alignItems:'center', gap:'.5rem', fontSize:'.82rem', color:C.muted }}>
               <span style={{ fontSize:'1.1rem' }}>{n}</span><span>{t}</span>
             </div>
@@ -1405,7 +1405,7 @@ function Humaniser({ go }) {
           <div style={{ background:'#fff8e8', border:`1.5px solid ${C.gold}`, borderRadius:4, padding:'1rem 1.5rem', marginBottom:'1.5rem', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'.75rem' }}>
             <div>
               <div style={{ fontWeight:700 }}>{expired ? '⚠️ Subscription Expired' : '👋 No active subscription'}</div>
-              <div style={{ fontSize:'.85rem', color:C.muted, marginTop:'.2rem' }}>Subscribe to use the humaniser.</div>
+              <div style={{ fontSize:'.85rem', color:C.muted, marginTop:'.2rem' }}>Subscribe to use the paraphraser.</div>
             </div>
             <Btn variant="gold" onClick={()=>go('subscribe')}>View Plans →</Btn>
           </div>
@@ -1447,14 +1447,14 @@ function Humaniser({ go }) {
               style={{ width:'100%', border:'none', borderTop:`1px solid ${C.border}`, background:C.white, padding:'1rem', fontSize:'.88rem', lineHeight:1.7, resize:'vertical', minHeight:320, outline:'none', color:C.ink, boxSizing:'border-box' }}/>
 
             <div style={{ padding:'.75rem 1rem', borderTop:`1px solid ${C.border}`, background:'#f8f6f2' }}>
-              <Btn variant="teal" full onClick={humanise}
+              <Btn variant="teal" full onClick={paraphrase}
                 disabled={loading || !inputText.trim() || noSub || expired || checksLeft <= 0}
                 style={{ padding:'.8rem', fontSize:'.9rem' }}>
                 {loading
-                  ? <><Spin size={16} color={C.white}/> Humanising your text…</>
-                  : noSub || expired ? 'Subscribe to humanise'
+                  ? <><Spin size={16} color={C.white}/> Paraphrasing your text…</>
+                  : noSub || expired ? 'Subscribe to paraphrase'
                   : checksLeft <= 0 ? 'Check limit reached'
-                  : '✍️ Deep Humanise (3-Pass) →'}
+                  : '✍️ Paraphrase Text (3-Pass) →'}
               </Btn>
               {!noSub && !expired && (
                 <div style={{ fontSize:'.7rem', color:C.muted, textAlign:'center', marginTop:'.4rem', fontFamily:"'DM Mono',monospace" }}>
@@ -1468,7 +1468,7 @@ function Humaniser({ go }) {
           <div style={{ background:C.white, border:`1.5px solid ${outputText ? C.teal : C.border}`, borderRadius:4, overflow:'hidden' }}>
             <div style={{ background: outputText ? '#e8f4f4' : '#f8f6f2', borderBottom:`1px solid ${C.border}`, padding:'.7rem 1rem', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
               <div style={{ fontFamily:"'DM Mono',monospace", fontSize:'.75rem', color: outputText ? C.teal : C.muted, letterSpacing:'.06em', fontWeight: outputText ? 700 : 400 }}>
-                {outputText ? '✅ HUMANISED TEXT' : 'OUTPUT — HUMANISED VERSION'}
+                {outputText ? '✅ PARAPHRASED TEXT' : 'OUTPUT — PARAPHRASED VERON'}
               </div>
               <div style={{ fontSize:'.72rem', color:C.muted, fontFamily:"'DM Mono',monospace" }}>{wordCount(outputText)} words</div>
             </div>
@@ -1476,23 +1476,23 @@ function Humaniser({ go }) {
             {outputText ? (
               <>
                 {/* Self-check score banner */}
-                {selfCheckScore !== null && (
-                  <div style={{ margin:'.75rem .75rem 0', padding:'.75rem 1rem', borderRadius:3, background: selfCheckScore < 25 ? '#f0fff4' : selfCheckScore < 55 ? '#fffbf0' : '#fff0f0', border:`1.5px solid ${selfCheckScore < 25 ? C.green : selfCheckScore < 55 ? C.amber : C.red}`, display:'flex', alignItems:'center', gap:'.75rem' }}>
-                    <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color: selfCheckScore < 25 ? C.green : selfCheckScore < 55 ? C.amber : C.red }}>{selfCheckScore}%</div>
+                {similarityScore !== null && (
+                  <div style={{ margin:'.75rem .75rem 0', padding:'.75rem 1rem', borderRadius:3, background: similarityScore < 25 ? '#f0fff4' : similarityScore < 55 ? '#fffbf0' : '#fff0f0', border:`1.5px solid ${similarityScore < 25 ? C.green : similarityScore < 55 ? C.amber : C.red}`, display:'flex', alignItems:'center', gap:'.75rem' }}>
+                    <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color: similarityScore < 25 ? C.green : similarityScore < 55 ? C.amber : C.red }}>{similarityScore}%</div>
                     <div>
-                      <div style={{ fontWeight:700, fontSize:'.85rem', color: selfCheckScore < 25 ? C.green : selfCheckScore < 55 ? C.amber : C.red }}>
-                        {selfCheckScore < 25 ? '✅ Passes AI Detection' : selfCheckScore < 55 ? '⚠️ May Still Trigger Some Detectors' : '❌ Still Reads as AI — Humanise Again'}
+                      <div style={{ fontWeight:700, fontSize:'.85rem', color: similarityScore < 25 ? C.green : similarityScore < 55 ? C.amber : C.red }}>
+                        {similarityScore < 25 ? '✅ Highly Original — Very different from source' : similarityScore < 55 ? '⚠️ Moderately original — Consider paraphrasing again' : '❌ Too similar to source — Run another pass'}
                       </div>
-                      <div style={{ fontSize:'.75rem', color:C.muted, marginTop:'.15rem' }}>Self-check score — lower is better</div>
+                      <div style={{ fontSize:'.75rem', color:C.muted, marginTop:'.15rem' }}>Similarity to original — lower is better</div>
                     </div>
                   </div>
                 )}
 
                 {/* Flagged sentences that still sound AI */}
-                {stillFlagged?.length > 0 && (
+                {closeMatches?.length > 0 && (
                   <div style={{ margin:'.5rem .75rem 0', padding:'.75rem 1rem', borderRadius:3, background:'#fffbf0', border:`1px solid ${C.amber}` }}>
-                    <div style={{ fontSize:'.72rem', fontWeight:700, color:C.amber, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.4rem' }}>Sentences that may still be flagged:</div>
-                    {stillFlagged.map((s, i) => (
+                    <div style={{ fontSize:'.72rem', fontWeight:700, color:C.amber, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.4rem' }}>Phrases still close to source — consider rewording:</div>
+                    {closeMatches.map((s, i) => (
                       <div key={i} style={{ fontSize:'.8rem', color:C.ink, fontStyle:'italic', padding:'.25rem 0', borderTop: i > 0 ? `1px solid ${C.border}` : 'none' }}>"{s}"</div>
                     ))}
                     <div style={{ fontSize:'.72rem', color:C.muted, marginTop:'.4rem' }}>Tip: Copy these sentences and manually rewrite them for best results</div>
@@ -1510,7 +1510,7 @@ function Humaniser({ go }) {
                     ⬇️ Download .TXT
                   </Btn>
                   <Btn variant="ghost" onClick={()=>{ go('dash'); }} style={{ padding:'.6rem 1.1rem', fontSize:'.82rem', flex:1 }}>
-                    🔍 Run AI Detection
+                    🔍 Check Plagiarism
                   </Btn>
                 </div>
               </>
@@ -1520,9 +1520,9 @@ function Humaniser({ go }) {
                   <>
                     <Spin size={36} />
                     <div style={{ marginTop:'1.25rem', fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, color:C.teal }}>
-                      {loadingMsg || 'Humanising your text…'}
+                      {loadingMsg || 'Paraphrasing your text…'}
                     </div>
-                    <div style={{ marginTop:'.5rem', fontSize:'.82rem', color:C.muted }}>Three-pass deep rewrite + self-check — takes 40–60 seconds for best results</div>
+                    <div style={{ marginTop:'.5rem', fontSize:'.82rem', color:C.muted }}>Three-pass paraphrase — takes 40–60 seconds for best results</div>
                     {/* Progress dots */}
                     <div style={{ display:'flex', gap:'.4rem', marginTop:'1rem' }}>
                       {[0,1,2,3,4].map(i=>(
@@ -1533,8 +1533,8 @@ function Humaniser({ go }) {
                 ) : (
                   <>
                     <div style={{ fontSize:'3rem', marginBottom:'1rem' }}>✍️</div>
-                    <div style={{ fontWeight:600, color:C.ink, marginBottom:'.4rem' }}>Humanised text will appear here</div>
-                    <div style={{ fontSize:'.83rem', lineHeight:1.6 }}>Paste your AI-generated text on the left, choose a style, and click Humanise.</div>
+                    <div style={{ fontWeight:600, color:C.ink, marginBottom:'.4rem' }}>Paraphrased text will appear here</div>
+                    <div style={{ fontSize:'.83rem', lineHeight:1.6 }}>Paste your text on the left, choose a style, and click Paraphrase.</div>
                   </>
                 )}
               </div>
@@ -1549,10 +1549,10 @@ function Humaniser({ go }) {
           <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, marginBottom:'1rem' }}>💡 Tips for Best Results</div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:'1rem' }}>
             {[
-              ['After humanising', 'Run AI Detection again to confirm the score dropped significantly.'],
-              ['Long documents', 'For long papers, humanise section by section for better quality.'],
-              ['Review carefully', 'Always review the humanised text — check that your meaning is preserved.'],
-              ['Multiple passes', 'If the AI score is still high, humanise the output a second time.'],
+              ['After paraphrasing', 'Run AI Detection again to confirm the score dropped significantly.'],
+              ['Long documents', 'For long papers, paraphrase section by section for better quality.'],
+              ['Review carefully', 'Always review the paraphrased text — make sure all facts and arguments are preserved accurately.'],ck that your meaning is preserved.'],
+              ['Multiple passes', 'If similarity is still high, paraphrase the output a second time.'],
             ].map(([title, tip]) => (
               <div key={title} style={{ background:C.cream, borderRadius:3, padding:'1rem' }}>
                 <div style={{ fontWeight:700, fontSize:'.85rem', marginBottom:'.35rem', color:C.teal }}>{title}</div>
@@ -1566,7 +1566,7 @@ function Humaniser({ go }) {
         <div style={{ marginTop:'1.25rem', background:'#fff8e8', border:`1px solid ${C.gold}`, borderRadius:3, padding:'1rem 1.25rem', display:'flex', gap:'.75rem', alignItems:'flex-start' }}>
           <span style={{ fontSize:'1.2rem', flexShrink:0 }}>⚠️</span>
           <div style={{ fontSize:'.82rem', color:C.ink, lineHeight:1.7 }}>
-            <strong>Academic integrity notice:</strong> The humaniser is designed to help researchers improve their own drafts that were partially assisted by AI tools. Using it to submit entirely AI-generated work as your own original research violates academic integrity policies. OriginCheck encourages honest, ethical use of all its tools.
+            <strong>Academic integrity notice:</strong> The paraphraser is designed to help researchers rewrite text in their own words — reducing plagiarism similarity scores, improving clarity, and adapting content for different audiences. This is a legitimate and widely accepted academic skill. OriginCheck encourages honest, ethical use of all its tools.
           </div>
         </div>
       </div>
@@ -2580,7 +2580,7 @@ function Admin({ go }) {
               <div style={{ marginBottom:'1rem' }}>
                 <div style={{ fontSize:'.78rem', fontWeight:700, color:C.teal, textTransform:'uppercase', letterSpacing:'.1em', marginBottom:'.5rem' }}>2. Subject Line</div>
                 <input value={emailForm.subject} onChange={e=>setEmailForm(p=>({...p, subject:e.target.value}))}
-                  placeholder="e.g. New feature: AI Humaniser is now live on OriginCheck!"
+                  placeholder="e.g. New feature: Academic Paraphraser is now live originCheck!"
                   style={{ width:'100%', background:C.white, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.7rem .9rem', fontSize:'.9rem', outline:'none', color:C.ink }}/>
               </div>
 
@@ -2589,7 +2589,7 @@ function Admin({ go }) {
                 <div style={{ fontSize:'.78rem', fontWeight:700, color:C.teal, textTransform:'uppercase', letterSpacing:'.1em', marginBottom:'.5rem' }}>3. Message Body</div>
                 <div style={{ fontSize:'.75rem', color:C.muted, marginBottom:'.4rem' }}>Use blank lines between paragraphs. Keep it concise — 3–5 paragraphs works best.</div>
                 <textarea value={emailForm.body} onChange={e=>setEmailForm(p=>({...p, body:e.target.value}))}
-                  placeholder={"We are excited to announce a new feature on OriginCheck...\n\nYou can now use the AI Humaniser to rewrite AI-generated text so it sounds naturally human-written.\n\nLog in to try it today: " + (typeof window !== 'undefined' ? window.location.origin : 'https://origincheck.ng')}
+                  placeholder={"We are excited to announce a new feature on OriginCheck...\n\nYou can now use our Academic Paraphraser to rewrite your text in completely different words while preserving all meaning — reducing plagiarism similarity scores instantly.\n\nLog in to try it today: " + (typeof window !== 'undefined' ? window.location.origin : 'https://origincheck.ng')}
                   style={{ width:'100%', background:C.cream, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.85rem', fontSize:'.88rem', outline:'none', resize:'vertical', minHeight:180, lineHeight:1.7, color:C.ink }}/>
                 <div style={{ fontSize:'.72rem', color:C.muted, textAlign:'right', marginTop:'.3rem', fontFamily:"'DM Mono',monospace" }}>
                   {emailForm.body.trim().split(/\s+/).filter(Boolean).length} words
@@ -2778,7 +2778,7 @@ function AppInner() {
     register:   <Register go={go}/>,
     dash:       <Dashboard go={go}/>,
     history:    <History go={go}/>,
-    humanise:   <Humaniser go={go}/>,
+    paraphrase: <Paraphraser go={go}/>,
     subscribe:  <Subscribe go={go}/>,
     admin:      <Admin go={go}/>,
     affiliate:  <Affiliate go={go}/>,
