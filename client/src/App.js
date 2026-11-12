@@ -1549,9 +1549,9 @@ function Paraphraser({ go }) {
           <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.1rem', fontWeight:700, marginBottom:'1rem' }}>💡 Tips for Best Results</div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:'1rem' }}>
             {[
-              ['After paraphrasing', 'Run AI Detection again to confirm the score dropped significantly.'],
+              ['After paraphrasing', 'Run a plagiarism check on the paraphrased text to confirm the similarity score dropped.'],
               ['Long documents', 'For long papers, paraphrase section by section for better quality.'],
-              ['Review carefully', 'Always review the paraphrased text — make sure all facts and arguments are preserved accurately.'],ck that your meaning is preserved.'],
+              ['Review carefully', 'Always review the paraphrased text to check that your meaning is preserved.'],
               ['Multiple passes', 'If similarity is still high, paraphrase the output a second time.'],
             ].map(([title, tip]) => (
               <div key={title} style={{ background:C.cream, borderRadius:3, padding:'1rem' }}>
