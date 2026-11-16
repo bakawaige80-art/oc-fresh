@@ -212,6 +212,7 @@ async function initDB() {
 
 // ── App ───────────────────────────────────────────────────
 const app = express();
+app.set('trust proxy', 1);
 // ── PAYSTACK WEBHOOK — must be raw BEFORE express.json() ──
 // Paystack sends raw body for HMAC verification
 app.post('/api/payment/webhook', express.raw({ type: '*/*' }), async (req, res) => {
@@ -346,6 +347,12 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/auth/me', auth, async (req, res) => {
   try {
+    // If the user paid but neither callback nor webhook reached us, activate them now.
+    const now = Date.now();
+    if (now - (lastPaymentSync.get(req.user.id) || 0) > 20000) {
+      lastPaymentSync.set(req.user.id, now);
+      await syncPendingPayments(req.user.id).catch(e => console.error('auto-sync:', e.message));
+    }
     const user = await safeUser(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found.' });
     res.json({ user });
@@ -356,10 +363,31 @@ app.get('/api/auth/me', auth, async (req, res) => {
 app.get('/api/plans', (req, res) => res.json({ plans: PLANS }));
 
 // ── PAYMENT ───────────────────────────────────────────────
+// Design goals: a customer who pays gets access automatically, whichever of
+// these three safety nets fires first (all are idempotent and safe to repeat):
+//   1) Paystack callback  -> browser returns to the site, plan activated
+//   2) Paystack webhook   -> server-to-server, even if the user closes the tab
+//   3) Auto-sync          -> when the user next opens the app (or taps "Activate my plan")
+
+// Origin of THIS server as the browser sees it. Not taken from APP_URL, so a stale
+// env var (old Render service, renamed service, etc.) can never send a customer to a dead site.
+function requestOrigin(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host  = (req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim();
+  return host ? `${proto}://${host}` : (APP_URL || '');
+}
+// Where to send the customer after paying: the same site that served the callback
+// (single-service deploy). Only use FRONTEND_URL when this server has no built frontend.
+function returnOrigin(req) {
+  const origin = requestOrigin(req);
+  const hasBuiltFrontend = fs.existsSync(path.join(__dirname, 'client', 'build', 'index.html'));
+  return hasBuiltFrontend ? origin : (process.env.FRONTEND_URL || origin);
+}
+
 app.post('/api/payment/initialize', auth, async (req, res) => {
   try {
     const { plan } = req.body;
-    if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan.' });
+    if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Invalid plan.' });
     if (!PAYSTACK_KEY) return res.status(500).json({ error: 'Payment not configured on server.' });
     const user = await db.get('SELECT id,email,name FROM users WHERE id=$1', [req.user.id]);
     const ref = 'oc_' + uuidv4().replace(/-/g, '').slice(0, 16);
@@ -370,41 +398,50 @@ app.post('/api/payment/initialize', auth, async (req, res) => {
       headers: { Authorization: `Bearer ${PAYSTACK_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: user.email, amount: PLANS[plan].price, reference: ref, currency: 'NGN',
         metadata: { user_id: user.id, plan, user_name: user.name },
-        callback_url: `${APP_URL}/api/payment/callback` }),
+        callback_url: `${requestOrigin(req)}/api/payment/callback` }),
     });
     const data = await ps.json();
     if (!data.status) throw new Error(data.message);
     res.json({ authorization_url: data.data.authorization_url, reference: ref });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Could not start payment. Try again.' }); }
+  } catch (e) { console.error('Payment init error:', e.message); res.status(500).json({ error: 'Could not start payment. Try again.' }); }
 });
 
+// Paystack sends the customer here right after payment.
 app.get('/api/payment/callback', async (req, res) => {
+  const back = returnOrigin(req);
   try {
-    const { reference, trxref } = req.query;
-    const ref = reference || trxref;
-    if (!ref) return res.redirect(`${process.env.FRONTEND_URL || APP_URL}/?payment=failed`);
+    const ref = req.query.reference || req.query.trxref;
+    if (!ref) return res.redirect(`${back}/?payment=failed`);
     const ok = await verifyPaystack(ref);
-    // Always redirect to frontend (not backend API URL)
-    const frontendUrl = process.env.FRONTEND_URL || APP_URL;
-    res.redirect(ok
-      ? `${frontendUrl}/?payment=success&ref=${ref}`
-      : `${frontendUrl}/?payment=failed`
-    );
+    res.redirect(ok ? `${back}/?payment=success&pref=${encodeURIComponent(ref)}` : `${back}/?payment=failed&pref=${encodeURIComponent(ref)}`);
   } catch (e) {
     console.error('Callback error:', e.message);
-    const frontendUrl = process.env.FRONTEND_URL || APP_URL;
-    res.redirect(`${frontendUrl}/?payment=error`);
+    res.redirect(`${back}/?payment=error&pref=${encodeURIComponent(req.query.reference || req.query.trxref || '')}`);
   }
 });
 
+function subscriptionActive(u) {
+  return !!(u && ['basic', 'researcher', 'university'].includes(u.plan) && u.sub_expires && new Date(u.sub_expires) > new Date());
+}
+
+// Frontend polls this right after the customer returns from Paystack.
 app.get('/api/payment/verify/:ref', auth, async (req, res) => {
   try {
     const pay = await db.get('SELECT * FROM payments WHERE reference=$1 AND user_id=$2', [req.params.ref, req.user.id]);
     if (!pay) return res.status(404).json({ error: 'Payment not found.' });
-    if (pay.status === 'success') return res.json({ status: 'success', user: await safeUser(req.user.id) });
-    const ok = await verifyPaystack(req.params.ref);
+    let ok = false;
+    if (pay.status === 'success' && subscriptionActive(await db.get('SELECT plan,sub_expires FROM users WHERE id=$1', [req.user.id]))) ok = true;
+    else ok = await verifyPaystack(req.params.ref).catch(e => { console.error('verify route:', e.message); return false; });
     res.json({ status: ok ? 'success' : 'pending', user: await safeUser(req.user.id) });
-  } catch { res.status(500).json({ error: 'Verification failed.' }); }
+  } catch (e) { console.error(e.message); res.status(500).json({ error: 'Verification failed.' }); }
+});
+
+// "I already paid" — checks this user's recent unconfirmed payments with Paystack and activates any that succeeded.
+app.post('/api/payment/sync', auth, async (req, res) => {
+  try {
+    const activated = await syncPendingPayments(req.user.id, { hours: 72, max: 5 });
+    res.json({ activated: activated > 0, user: await safeUser(req.user.id) });
+  } catch (e) { console.error('sync route:', e.message); res.status(500).json({ error: 'Could not check your payment. Please try again.' }); }
 });
 
 // ── ADMIN: Force-verify a stuck payment by reference ──────
@@ -413,12 +450,12 @@ app.post('/api/admin/fix-payment', auth, async (req, res) => {
   try {
     const { reference } = req.body;
     if (!reference) return res.status(400).json({ error: 'Reference required.' });
-    const ok = await verifyPaystack(reference);
+    const ok = await verifyPaystack(String(reference).trim(), { force: true });
     res.json({
       success: ok,
       message: ok
         ? 'Payment verified and subscription activated successfully.'
-        : 'Verification failed — check Render logs for exact error.',
+        : 'Verification failed — Paystack does not show this payment as successful, or the reference is unknown. Check Render logs.',
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -430,101 +467,111 @@ app.get('/api/payment/history', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Failed.' }); }
 });
 
-async function verifyPaystack(reference) {
-  if (!PAYSTACK_KEY || !reference) {
-    console.error('verifyPaystack: missing key or reference');
-    return false;
-  }
+// Verify with Paystack and activate the plan. Safe to call any number of times for the same reference:
+// only the FIRST successful call activates the plan and credits the affiliate.
+async function verifyPaystack(reference, { force = false } = {}) {
+  if (!PAYSTACK_KEY || !reference) { console.error('verifyPaystack: missing key or reference'); return false; }
 
-  const r = await fetch(`https://api.paystack.co/transaction/verify/${reference}`,
+  const r = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
     { headers: { Authorization: `Bearer ${PAYSTACK_KEY}` } });
-  const data = await r.json();
+  const data = await r.json().catch(() => ({}));
+  const tx = data && data.data;
+  console.log('Paystack verify:', reference, '| api status:', data.status, '| payment status:', tx && tx.status, '| amount:', tx && tx.amount);
+  if (!data.status || !tx || tx.status !== 'success') return false;
 
-  console.log('Paystack verify raw response:', JSON.stringify({
-    status: data.status,
-    paymentStatus: data.data?.status,
-    reference: data.data?.reference,
-    metadata: data.data?.metadata,
-    amount: data.data?.amount,
-    message: data.message,
-  }));
-
-  if (!data.status || data.data?.status !== 'success') {
-    console.warn('Paystack: not successful — status:', data.data?.status, 'message:', data.message);
-    return false;
-  }
-
-  // Paystack can return metadata as object or JSON string — handle both
-  let meta = data.data.metadata || {};
-  if (typeof meta === 'string') {
-    try { meta = JSON.parse(meta); } catch(e) { meta = {}; }
-  }
-  // Also check metadata.custom_fields array (Paystack popup format)
+  // Our own payments row (created when checkout started) is the source of truth; metadata is the fallback.
+  let row = await db.get('SELECT * FROM payments WHERE reference=$1', [reference]);
+  let meta = tx.metadata || {};
+  if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = {}; } }
   if (!meta.user_id && Array.isArray(meta.custom_fields)) {
-    meta.custom_fields.forEach(f => {
-      if (f.variable_name === 'user_id') meta.user_id = f.value;
-      if (f.variable_name === 'plan') meta.plan = f.value;
-    });
+    meta.custom_fields.forEach(f => { if (f.variable_name === 'user_id') meta.user_id = f.value; if (f.variable_name === 'plan') meta.plan = f.value; });
   }
-
-  const { user_id, plan } = meta;
+  const user_id = (row && row.user_id) || meta.user_id;
+  const plan    = (row && row.plan)    || meta.plan;
   const pl = PLANS[plan];
-
-  console.log('verifyPaystack — user_id:', user_id, '| plan:', plan, '| PLANS[plan]:', pl ? 'found' : 'NOT FOUND');
-
-  if (!pl) {
-    console.error('verifyPaystack: unknown plan in metadata:', plan, '| full meta:', JSON.stringify(meta));
-    return false;
-  }
-  if (!user_id) {
-    console.error('verifyPaystack: no user_id in metadata — ref:', reference, '| full meta:', JSON.stringify(meta));
+  if (!pl || plan === 'free' || !user_id) {
+    console.error('verifyPaystack: cannot identify user/plan for', reference, '| row:', !!row, '| meta:', JSON.stringify(meta));
     return false;
   }
 
-  const exp = new Date();
-  exp.setDate(exp.getDate() + 30);
-
-  // Update user subscription
-  const updateResult = await db.run(
-    'UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,gptzero_limit=$3,gptzero_used=0,sub_expires=$4 WHERE id=$5',
-    [plan, pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), user_id]
-  );
-  console.log('User updated — user_id:', user_id, '| plan:', plan, '| expires:', exp.toISOString(), '| rows:', updateResult?.changes ?? 'unknown');
-
-  // Upsert payment record
-  const existingPayment = await db.get('SELECT id FROM payments WHERE reference=$1', [reference]);
-  if (existingPayment) {
-    await db.run('UPDATE payments SET status=$1,paystack_id=$2 WHERE reference=$3',
-      ['success', String(data.data.id), reference]);
-  } else {
-    await db.run('INSERT INTO payments (id,user_id,plan,amount,reference,status,paystack_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [uuidv4(), user_id, plan, data.data.amount, reference, 'success', String(data.data.id)]);
-    console.log('Payment row created from webhook for ref:', reference);
+  // Never grant a plan for less than its price.
+  if (!force && (Number(tx.amount) < pl.price || (tx.currency && tx.currency !== 'NGN'))) {
+    console.error(`verifyPaystack: underpaid/wrong currency for ${reference}: paid ${tx.amount} ${tx.currency}, plan needs ${pl.price} NGN`);
+    await db.run("UPDATE payments SET status='underpaid' WHERE reference=$1 AND status<>'success'", [reference]).catch(() => {});
+    return false;
   }
 
-  // Credit affiliate commission if this user was referred
+  // Make sure a payments row exists (webhook could, in theory, beat our insert).
+  if (!row) {
+    await db.run('INSERT INTO payments (id,user_id,plan,amount,reference,status) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (reference) DO NOTHING',
+      [uuidv4(), user_id, plan, Number(tx.amount), reference, 'pending']);
+  }
+
+  // Claim: exactly one caller can flip pending -> success. Everyone else is a duplicate.
+  const claim = await db.run("UPDATE payments SET status='success', paystack_id=$2 WHERE reference=$1 AND status<>'success' RETURNING id",
+    [reference, String(tx.id)]);
+  const wonClaim = claim.rowCount > 0;
+
+  const cur = await db.get('SELECT plan,sub_expires FROM users WHERE id=$1', [user_id]);
+  if (!cur) { console.error('verifyPaystack: user not found', user_id); return false; }
+
+  if (!wonClaim && !force) {
+    // Already processed. If the user is active on any plan, nothing to do — and an old payment must never overwrite a newer plan.
+    if (subscriptionActive(cur)) return true;
+    console.warn('verifyPaystack: payment was marked paid but user has no active plan — re-activating', reference);
+  }
+
+  // Renewing the same plan while still active stacks on the remaining time; anything else starts today.
+  let startFrom = new Date();
+  if (cur.plan === plan && cur.sub_expires && new Date(cur.sub_expires) > startFrom) startFrom = new Date(cur.sub_expires);
+  const exp = new Date(startFrom); exp.setDate(exp.getDate() + 30);
+
   try {
-    const referredUser = await db.get('SELECT referred_by FROM users WHERE id=$1', [user_id]);
-    if (referredUser?.referred_by) {
-      const affId = referredUser.referred_by;
-      const commRate = COMMISSION[plan] || 0;
-      const commAmount = Math.floor(PLANS[plan].price * commRate);
-      if (commAmount > 0) {
-        await db.run(
-          'INSERT INTO referrals (id,affiliate_id,referred_user_id,plan,commission,status) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
-          [uuidv4(), affId, user_id, plan, commAmount, 'pending']
-        );
-        await db.run(
-          'UPDATE affiliates SET total_referrals=total_referrals+1, total_earnings=total_earnings+$1, pending_earnings=pending_earnings+$1 WHERE id=$2',
-          [commAmount, affId]
-        );
-        console.log('Affiliate commission credited — affiliate:', affId, '| amount:', commAmount);
-      }
-    }
-  } catch(e) { console.error('Affiliate commission error:', e.message); }
+    const upd = await db.run(
+      'UPDATE users SET plan=$1,checks_limit=$2,checks_used=0,gptzero_limit=$3,gptzero_used=0,sub_expires=$4 WHERE id=$5',
+      [plan, pl.checks, pl.gptzeroChecks || 0, exp.toISOString(), user_id]);
+    if (upd.rowCount === 0) throw new Error('user row not updated');
+    console.log(`Activated ${plan} for user ${user_id} until ${exp.toISOString()} (ref ${reference})`);
+  } catch (e) {
+    // Activation failed: release the claim so a retry (webhook / sync) can try again.
+    await db.run("UPDATE payments SET status='pending' WHERE reference=$1", [reference]).catch(() => {});
+    console.error('verifyPaystack: activation failed, will retry later:', e.message);
+    throw e;
+  }
 
+  // Affiliate commission — only for the call that actually processed the payment.
+  if (wonClaim) {
+    try {
+      const referred = await db.get('SELECT referred_by FROM users WHERE id=$1', [user_id]);
+      if (referred && referred.referred_by) {
+        const commAmount = Math.floor(pl.price * (COMMISSION[plan] || 0));
+        if (commAmount > 0) {
+          await db.run('INSERT INTO referrals (id,affiliate_id,referred_user_id,plan,commission,status) VALUES ($1,$2,$3,$4,$5,$6)',
+            [uuidv4(), referred.referred_by, user_id, plan, commAmount, 'pending']);
+          await db.run('UPDATE affiliates SET total_referrals=total_referrals+1, total_earnings=total_earnings+$1, pending_earnings=pending_earnings+$1 WHERE id=$2',
+            [commAmount, referred.referred_by]);
+          console.log('Affiliate commission credited:', referred.referred_by, commAmount);
+        }
+      }
+    } catch (e) { console.error('Affiliate commission error:', e.message); }
+  }
   return true;
 }
+
+// Check a user's recent unconfirmed payments with Paystack. Returns how many were activated.
+async function syncPendingPayments(userId, { hours = 2, max = 3 } = {}) {
+  const rows = await db.all(
+    "SELECT reference FROM payments WHERE user_id=$1 AND status='pending' AND created_at > NOW() - make_interval(hours => $2) ORDER BY created_at DESC LIMIT $3",
+    [userId, hours, max]);
+  let activated = 0;
+  for (const p of rows) {
+    try { if (await verifyPaystack(p.reference)) activated++; }
+    catch (e) { console.error('syncPendingPayments:', p.reference, e.message); }
+  }
+  return activated;
+}
+const lastPaymentSync = new Map();   // userId -> timestamp, keeps /api/auth/me cheap
+
 
 // ── FILE UPLOAD ───────────────────────────────────────────
 app.post('/api/extract', auth, upload.single('file'), async (req, res) => {
