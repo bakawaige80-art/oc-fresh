@@ -1203,6 +1203,19 @@ function Subscribe({ go }) {
   const [busy, setBusy]   = useState(null);
   const [err, setErr]     = useState('');
   const [verifying, setVerifying] = useState(false);
+  const [notice, setNotice] = useState(() => { const n = sessionStorage.getItem('oc_pay_notice'); if (n) sessionStorage.removeItem('oc_pay_notice'); return n || ''; });
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
+
+  const activateNow = async () => {
+    setSyncing(true); setSyncMsg(''); setNotice('');
+    try {
+      const d = await af('/api/payment/sync', { method: 'POST' });
+      if (d.activated) { setUser(d.user); sessionStorage.setItem('oc_pay_success', '1'); go('dash'); return; }
+      setSyncMsg('We could not find a confirmed payment yet. If you were charged, please wait 2 minutes and try again, or contact us on WhatsApp +2347016270709 with your payment receipt.');
+    } catch (e) { setSyncMsg(e.message); }
+    finally { setSyncing(false); }
+  };
 
   useEffect(()=>{
     const p=new URLSearchParams(window.location.search);
@@ -1255,6 +1268,16 @@ function Subscribe({ go }) {
           <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'2.4rem', fontWeight:900, marginBottom:'.5rem' }}>Choose Your Plan</div>
           <div style={{ color:C.muted, fontSize:'.92rem' }}>All plans are billed monthly. Cancel any time.</div>
         </div>
+        {notice==='pending'&&(
+          <div style={{ background:'#fffbf0', border:`1.5px solid ${C.amber}`, borderRadius:4, padding:'1rem 1.5rem', marginBottom:'1.5rem', fontSize:'.88rem', color:C.ink, lineHeight:1.6 }}>
+            ⏳ <strong>We have not received confirmation of your payment yet.</strong> If you were charged, your plan will activate automatically within a few minutes. You can also tap <strong>Activate my plan</strong> below.
+          </div>
+        )}
+        {notice==='failed'&&(
+          <div style={{ background:'#fff0f0', border:`1.5px solid ${C.red}`, borderRadius:4, padding:'1rem 1.5rem', marginBottom:'1.5rem', fontSize:'.88rem', color:C.red, fontWeight:600 }}>
+            Your payment was not completed. No money was taken. Please try again.
+          </div>
+        )}
         {user&&user.plan!=='none'&&!subExpired&&(
           <div style={{ background:'#f0fff4', border:`1.5px solid #b0e0c0`, borderRadius:4, padding:'1rem 1.5rem', marginBottom:'2rem', display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'.75rem', alignItems:'center' }}>
             <div>
@@ -1294,6 +1317,16 @@ function Subscribe({ go }) {
             );
           })}
         </div>
+        {user&&(
+          <div style={{ marginTop:'2rem', background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, padding:'1.25rem 1.5rem', textAlign:'center' }}>
+            <div style={{ fontWeight:700, marginBottom:'.3rem' }}>Already paid but your plan is not active?</div>
+            <div style={{ fontSize:'.82rem', color:C.muted, marginBottom:'.85rem' }}>Tap the button and we will check your payment with Paystack and activate your plan immediately.</div>
+            <Btn variant="teal" onClick={activateNow} disabled={syncing} style={{ padding:'.65rem 1.4rem', fontSize:'.85rem' }}>
+              {syncing ? <><Spin size={14} color={C.white}/> Checking…</> : '✅ Activate my plan'}
+            </Btn>
+            {syncMsg&&<div style={{ marginTop:'.85rem', fontSize:'.82rem', color:C.red, lineHeight:1.6 }}>{syncMsg}</div>}
+          </div>
+        )}
         <div style={{ textAlign:'center', marginTop:'2rem', color:C.muted, fontSize:'.8rem' }}>
           🔒 Payments processed securely by <strong style={{ color:C.ink }}>Paystack</strong> · Cards, Bank Transfer & USSD accepted
         </div>
@@ -2705,8 +2738,10 @@ function Admin({ go }) {
 
 // ── ROUTER ────────────────────────────────────────────────
 function AppInner() {
-  const { user, ready } = useAuth();
+  const { user, setUser, ready, af } = useAuth();
   const [page, setPage] = useState('home');
+  const [confirming, setConfirming] = useState(false);
+  const paymentHandled = useRef(false);
 
   const go = p => { setPage(p); window.scrollTo(0,0); };
 
@@ -2720,41 +2755,40 @@ function AppInner() {
     }
   }, []);
 
-  // Handle Paystack payment callback redirect
+  // Customer is coming back from Paystack: confirm the payment, refresh their plan, open the dashboard.
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || paymentHandled.current) return;
     const params = new URLSearchParams(window.location.search);
-    const paymentStatus = params.get('payment');
-    const payRef = params.get('ref');
+    const status = params.get('payment');
+    if (!status) return;
+    paymentHandled.current = true;
+    const pref = params.get('pref') || localStorage.getItem('oc_pending_ref') || '';
+    window.history.replaceState({}, '', window.location.pathname);   // so a refresh does not repeat this
 
-    if (!paymentStatus) return;
-
-    // Clear query params immediately so refresh doesn't re-trigger
-    window.history.replaceState({}, '', window.location.pathname);
-
-    if (paymentStatus === 'success') {
-      // Set a flag so the dashboard shows a success banner
-      sessionStorage.setItem('oc_pay_success', '1');
-      // Re-fetch user so the updated plan/subscription shows immediately
-      const refreshUser = async () => {
+    if (!localStorage.getItem('oc_tok')) { go('login'); return; }
+    setConfirming(true);
+    (async () => {
+      // The server already checked with Paystack, but confirm here and wait a little if Paystack is slow.
+      const attempts = status === 'failed' ? 2 : 12;
+      for (let i = 0; i < attempts; i++) {
         try {
-          const token = localStorage.getItem('oc_tok');
-          if (!token) { go('login'); return; }
-          const r = await fetch(API + '/api/auth/me', {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (r.ok) {
-            const d = await r.json();
+          const d = pref ? await af('/api/payment/verify/' + encodeURIComponent(pref)) : await af('/api/payment/sync', { method: 'POST' });
+          if (d.status === 'success' || d.activated) {
             setUser(d.user);
+            localStorage.removeItem('oc_pending_ref');
+            sessionStorage.setItem('oc_pay_success', '1');
+            setConfirming(false);
+            go('dash');
+            return;
           }
-        } catch(e) { console.error('Refresh error:', e); }
-      };
-      refreshUser().then(() => go('dash'));
-      setTimeout(() => go('dash'), 1500);
-    } else if (paymentStatus === 'failed' || paymentStatus === 'error') {
-      if (user) go('subscribe');
-      else go('login');
-    }
+        } catch (e) { /* keep trying */ }
+        await new Promise(r => setTimeout(r, 2500));
+      }
+      try { const me = await af('/api/auth/me'); setUser(me.user); } catch (e) { /* ignore */ }
+      sessionStorage.setItem('oc_pay_notice', status === 'failed' ? 'failed' : 'pending');
+      setConfirming(false);
+      go('subscribe');
+    })();
   }, [ready]);
 
   useEffect(()=>{
@@ -2768,6 +2802,17 @@ function AppInner() {
       <div style={{ textAlign:'center' }}>
         <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color:C.gold, marginBottom:'1rem' }}>OriginCheck</div>
         <Spin size={28}/>
+      </div>
+    </div>
+  );
+
+  if (confirming) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:C.paper, padding:'1.5rem' }}>
+      <div style={{ textAlign:'center', maxWidth:420 }}>
+        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.5rem', fontWeight:900, color:C.gold, marginBottom:'1.25rem' }}>OriginCheck</div>
+        <Spin size={40}/>
+        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.4rem', fontWeight:900, marginTop:'1.5rem', marginBottom:'.5rem' }}>Confirming your payment…</div>
+        <div style={{ color:C.muted, fontSize:'.9rem', lineHeight:1.6 }}>This only takes a few seconds. Please do not close this page — your plan is being activated.</div>
       </div>
     </div>
   );
