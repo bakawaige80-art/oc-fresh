@@ -153,6 +153,7 @@ async function initDB() {
       paystack_id TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS authorization_url TEXT;
     CREATE TABLE IF NOT EXISTS affiliates (
       id TEXT PRIMARY KEY,
       user_id TEXT UNIQUE NOT NULL,
@@ -390,6 +391,13 @@ app.post('/api/payment/initialize', auth, async (req, res) => {
     if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Invalid plan.' });
     if (!PAYSTACK_KEY) return res.status(500).json({ error: 'Payment not configured on server.' });
     const user = await db.get('SELECT id,email,name FROM users WHERE id=$1', [req.user.id]);
+
+    // Double-clicks / quick retries: hand back the checkout that is already open instead of creating another payment row.
+    const open = await db.get(
+      "SELECT reference, authorization_url FROM payments WHERE user_id=$1 AND plan=$2 AND status='pending' AND authorization_url IS NOT NULL AND created_at > NOW() - INTERVAL '10 minutes' ORDER BY created_at DESC LIMIT 1",
+      [user.id, plan]);
+    if (open) return res.json({ authorization_url: open.authorization_url, reference: open.reference, reused: true });
+
     const ref = 'oc_' + uuidv4().replace(/-/g, '').slice(0, 16);
     await db.run('INSERT INTO payments (id,user_id,plan,amount,reference) VALUES ($1,$2,$3,$4,$5)',
       [uuidv4(), user.id, plan, PLANS[plan].price, ref]);
@@ -401,7 +409,11 @@ app.post('/api/payment/initialize', auth, async (req, res) => {
         callback_url: `${requestOrigin(req)}/api/payment/callback` }),
     });
     const data = await ps.json();
-    if (!data.status) throw new Error(data.message);
+    if (!data.status) {
+      await db.run("DELETE FROM payments WHERE reference=$1 AND status='pending'", [ref]).catch(() => {});   // never leave a dead attempt behind
+      throw new Error(data.message);
+    }
+    await db.run('UPDATE payments SET authorization_url=$1 WHERE reference=$2', [data.data.authorization_url, ref]);
     res.json({ authorization_url: data.data.authorization_url, reference: ref });
   } catch (e) { console.error('Payment init error:', e.message); res.status(500).json({ error: 'Could not start payment. Try again.' }); }
 });
@@ -1411,19 +1423,94 @@ async function makeCertificate(chk, user, overrides = { showAi: true }) {
 
 
 // ── ADMIN ─────────────────────────────────────────────────
+// SQL fragments shared by the admin user views
+const PAID_PLANS_SQL = "('basic','researcher','university')";
+const USER_STATUS_SQL = {
+  active:  `plan IN ${PAID_PLANS_SQL} AND sub_expires > NOW()`,
+  expired: `plan IN ${PAID_PLANS_SQL} AND (sub_expires IS NULL OR sub_expires <= NOW())`,
+  free:    "plan = 'free'",
+  none:    "plan = 'none'",
+};
+
 app.get('/api/admin/stats', auth, async (req, res) => {
   if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
   try {
-    const [tu,au,tc,tr,rp,ru] = await Promise.all([
+    const [tu,au,eu,fu,tc,tr,rp,ru] = await Promise.all([
       db.get("SELECT COUNT(*) c FROM users"),
-      db.get("SELECT COUNT(*) c FROM users WHERE plan!='none'"),
+      db.get(`SELECT COUNT(*) c FROM users WHERE ${USER_STATUS_SQL.active}`),
+      db.get(`SELECT COUNT(*) c FROM users WHERE ${USER_STATUS_SQL.expired}`),
+      db.get(`SELECT COUNT(*) c FROM users WHERE ${USER_STATUS_SQL.free}`),
       db.get("SELECT COUNT(*) c FROM checks"),
       db.get("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE status='success'"),
-      db.all("SELECT p.*,u.name,u.email FROM payments p JOIN users u ON p.user_id=u.id ORDER BY p.created_at DESC LIMIT 20"),
+      db.all("SELECT p.id,p.plan,p.amount,p.reference,p.status,p.created_at,u.name,u.email FROM payments p JOIN users u ON p.user_id=u.id WHERE p.status='success' ORDER BY p.created_at DESC LIMIT 20"),
       db.all("SELECT id,name,email,institution,plan,checks_used,checks_limit,sub_expires,created_at FROM users ORDER BY created_at DESC LIMIT 20"),
     ]);
-    res.json({ totalUsers:tu.c, activeUsers:au.c, totalChecks:tc.c, totalRevenue:tr.s, recentPayments:rp, recentUsers:ru });
+    res.json({ totalUsers:tu.c, activeUsers:au.c, expiredUsers:eu.c, freeUsers:fu.c, totalChecks:tc.c, totalRevenue:tr.s, recentPayments:rp, recentUsers:ru });
   } catch(e) { console.error(e); res.status(500).json({ error: 'Failed to load stats.' }); }
+});
+
+// ── ADMIN: payments list (successful by default; abandoned attempts are separate) ──
+app.get('/api/admin/payments', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try {
+    const status = ['success', 'pending', 'all'].includes(req.query.status) ? req.query.status : 'success';
+    const limit  = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
+    const page   = Math.max(parseInt(req.query.page) || 1, 1);
+    const where  = status === 'all' ? '' : status === 'pending' ? "WHERE p.status <> 'success'" : "WHERE p.status = 'success'";
+    const [total, counts, rows] = await Promise.all([
+      db.get(`SELECT COUNT(*) c FROM payments p ${where}`),
+      db.get("SELECT COUNT(*) FILTER (WHERE status='success') AS n_success, COUNT(*) FILTER (WHERE status <> 'success') AS n_unpaid, COUNT(*) AS n_all FROM payments"),
+      db.all(`SELECT p.id,p.plan,p.amount,p.reference,p.status,p.created_at,u.name,u.email
+              FROM payments p JOIN users u ON p.user_id=u.id ${where}
+              ORDER BY p.created_at DESC LIMIT $1 OFFSET $2`, [limit, (page - 1) * limit]),
+    ]);
+    const t = parseInt(total.c);
+    res.json({ payments: rows, total: t, page, pages: Math.max(Math.ceil(t / limit), 1),
+               counts: { success: parseInt(counts.n_success), unpaid: parseInt(counts.n_unpaid), all: parseInt(counts.n_all) } });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to load payments.' }); }
+});
+
+// Remove unpaid attempts older than an hour (an open checkout page is never touched)
+async function purgeAbandonedPayments(olderThanHours = 1) {
+  // Only plain unpaid attempts. 'underpaid' rows are real money received and are never auto-deleted.
+  const r = await db.run("DELETE FROM payments WHERE status = 'pending' AND created_at < NOW() - make_interval(hours => $1)", [olderThanHours]);
+  return r.rowCount || 0;
+}
+app.post('/api/admin/payments/clear-unpaid', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try { const n = await purgeAbandonedPayments(1); res.json({ success: true, deleted: n }); }
+  catch (e) { console.error(e); res.status(500).json({ error: 'Could not clear unpaid attempts.' }); }
+});
+
+// ── ADMIN: all users — search, filter, page, or limit=all for export ──
+app.get('/api/admin/users', auth, async (req, res) => {
+  if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Admin only.' });
+  try {
+    const all   = req.query.limit === 'all';
+    const limit = all ? 20000 : Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
+    const page  = all ? 1 : Math.max(parseInt(req.query.page) || 1, 1);
+    const conds = [], params = [];
+    const q = String(req.query.q || '').trim();
+    if (q) { params.push('%' + q.replace(/[\\%_]/g, '\\$&') + '%'); conds.push(`(name ILIKE $${params.length} OR email ILIKE $${params.length} OR COALESCE(institution,'') ILIKE $${params.length})`); }
+    if (['basic', 'researcher', 'university', 'free', 'none'].includes(req.query.plan)) { params.push(req.query.plan); conds.push(`plan = $${params.length}`); }
+    if (USER_STATUS_SQL[req.query.status]) conds.push(USER_STATUS_SQL[req.query.status]);
+    const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+
+    const [total, counts, rows] = await Promise.all([
+      db.get(`SELECT COUNT(*) c FROM users ${where}`, params),
+      db.get(`SELECT COUNT(*) AS n_all,
+                COUNT(*) FILTER (WHERE ${USER_STATUS_SQL.active}) AS n_active,
+                COUNT(*) FILTER (WHERE ${USER_STATUS_SQL.expired}) AS n_expired,
+                COUNT(*) FILTER (WHERE ${USER_STATUS_SQL.free}) AS n_free,
+                COUNT(*) FILTER (WHERE ${USER_STATUS_SQL.none}) AS n_none FROM users`),
+      db.all(`SELECT id,name,email,institution,plan,checks_used,checks_limit,sub_expires,created_at
+              FROM users ${where} ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+              [...params, limit, (page - 1) * limit]),
+    ]);
+    const t = parseInt(total.c);
+    res.json({ users: rows, total: t, page, pages: Math.max(Math.ceil(t / limit), 1),
+               counts: { all: +counts.n_all, active: +counts.n_active, expired: +counts.n_expired, free: +counts.n_free, none: +counts.n_none } });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to load users.' }); }
 });
 
 app.post('/api/admin/set-plan', auth, async (req, res) => {
@@ -1923,6 +2010,12 @@ initDB()
       startKeepAlive();
     });
     // Increase timeout to 120s for long-running paraphraser (3 passes) requests
+    // Housekeeping: drop unpaid checkout attempts older than 7 days (now, then every 6 hours)
+    const cleanupUnpaid = () => purgeAbandonedPayments(24 * 7)
+      .then(n => { if (n) console.log(`Cleanup: removed ${n} old unpaid payment attempts`); })
+      .catch(e => console.error('Cleanup error:', e.message));
+    cleanupUnpaid();
+    setInterval(cleanupUnpaid, 6 * 60 * 60 * 1000).unref();
     server.timeout = 120000;
     server.keepAliveTimeout = 120000;
   })
