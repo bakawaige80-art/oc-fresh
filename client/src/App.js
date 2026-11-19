@@ -2309,6 +2309,22 @@ function Terms({ go }) {
 }
 
 // ── ADMIN ─────────────────────────────────────────────────
+function Pager({ page, pages, total, limit, onPage }) {
+  if (!total) return null;
+  const from = (page - 1) * limit + 1, to = Math.min(page * limit, total);
+  const btn = dis => ({ padding:'.4rem .9rem', border:`1px solid ${C.border}`, background: dis ? C.cream : C.white, color: dis ? C.muted : C.ink, borderRadius:2, fontSize:'.8rem', fontWeight:600, cursor: dis ? 'not-allowed' : 'pointer' });
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'.75rem', padding:'.85rem 1rem', borderTop:`1px solid ${C.border}`, background:C.cream }}>
+      <div style={{ fontSize:'.8rem', color:C.muted }}>Showing <strong style={{ color:C.ink }}>{from}–{to}</strong> of <strong style={{ color:C.ink }}>{total}</strong></div>
+      <div style={{ display:'flex', alignItems:'center', gap:'.5rem' }}>
+        <button disabled={page <= 1} onClick={() => onPage(page - 1)} style={btn(page <= 1)}>← Prev</button>
+        <span style={{ fontSize:'.8rem', color:C.muted, fontFamily:"'DM Mono',monospace" }}>Page {page} / {pages}</span>
+        <button disabled={page >= pages} onClick={() => onPage(page + 1)} style={btn(page >= pages)}>Next →</button>
+      </div>
+    </div>
+  );
+}
+
 function Admin({ go }) {
   const { af } = useAuth();
   const [stats, setStats]   = useState(null);
@@ -2334,6 +2350,79 @@ function Admin({ go }) {
     af('/api/admin/ambassadors').then(d=>setAmbassadors(d)).catch(()=>{});
     af('/api/admin/email-preview').then(d=>setEmailCounts(d.segments)).catch(()=>{});
   },[]);
+
+  // ── Payments tab (successful by default; abandoned attempts live under their own filter) ──
+  const [payData, setPayData]       = useState(null);
+  const [payFilter, setPayFilter]   = useState('success');
+  const [payPage, setPayPage]       = useState(1);
+  const [payLoading, setPayLoading] = useState(false);
+  const [payNote, setPayNote]       = useState('');
+  const payReq = useRef(0);
+  const loadPayments = async () => {
+    const id = ++payReq.current;
+    setPayLoading(true);
+    try {
+      const d = await af(`/api/admin/payments?status=${payFilter}&page=${payPage}&limit=25`);
+      if (id === payReq.current) setPayData(d);
+    } catch (e) { if (id === payReq.current) setPayNote('❌ ' + e.message); }
+    finally { if (id === payReq.current) setPayLoading(false); }
+  };
+  useEffect(() => { if (tab === 'payments') loadPayments(); /* eslint-disable-next-line */ }, [tab, payFilter, payPage]);
+  const changePayFilter = f => { setPayFilter(f); setPayPage(1); setPayNote(''); };
+  const clearUnpaid = async () => {
+    if (!window.confirm('Remove all unpaid attempts older than 1 hour? Successful payments and underpaid records are never deleted.')) return;
+    try {
+      const d = await af('/api/admin/payments/clear-unpaid', { method: 'POST' });
+      setPayNote(`✅ Removed ${d.deleted} abandoned attempt${d.deleted === 1 ? '' : 's'}.`);
+      loadPayments();
+    } catch (e) { setPayNote('❌ ' + e.message); }
+  };
+
+  // ── Users tab (every user: search, filter, page, export) ──
+  const [usersData, setUsersData]       = useState(null);
+  const [userQ, setUserQ]               = useState('');
+  const [userQDeb, setUserQDeb]         = useState('');
+  const [userPlan, setUserPlan]         = useState('');
+  const [userStatus, setUserStatus]     = useState('');
+  const [userPage, setUserPage]         = useState(1);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [exporting, setExporting]       = useState(false);
+  const usersReq = useRef(0);
+  const userParams = extra => {
+    const qs = new URLSearchParams(extra);
+    if (userQDeb) qs.set('q', userQDeb);
+    if (userPlan) qs.set('plan', userPlan);
+    if (userStatus) qs.set('status', userStatus);
+    return qs.toString();
+  };
+  useEffect(() => { const t = setTimeout(() => { setUserQDeb(userQ.trim()); setUserPage(1); }, 350); return () => clearTimeout(t); }, [userQ]);
+  const loadUsers = async () => {
+    const id = ++usersReq.current;
+    setUsersLoading(true);
+    try {
+      const d = await af('/api/admin/users?' + userParams({ page: userPage, limit: 25 }));
+      if (id === usersReq.current) setUsersData(d);
+    } catch (e) { if (id === usersReq.current) setUsersData({ users: [], total: 0, page: 1, pages: 1, counts: {}, error: e.message }); }
+    finally { if (id === usersReq.current) setUsersLoading(false); }
+  };
+  useEffect(() => { if (tab === 'users') loadUsers(); /* eslint-disable-next-line */ }, [tab, userQDeb, userPlan, userStatus, userPage]);
+  const exportUsers = async () => {
+    setExporting(true);
+    try {
+      const d = await af('/api/admin/users?' + userParams({ limit: 'all' }));
+      // Names are typed by users: neutralise anything Excel could treat as a formula.
+      const cell = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+      const day = x => x ? new Date(x).toISOString().slice(0, 10) : '';
+      const rows = [['Name', 'Email', 'Institution', 'Plan', 'Subscription expires', 'Checks used', 'Checks limit', 'Joined']]
+        .concat(d.users.map(u => [u.name, u.email, u.institution || '', u.plan, day(u.sub_expires), u.checks_used, u.checks_limit, day(u.created_at)]));
+      const csv = '\uFEFF' + rows.map(r => r.map(cell).join(',')).join('\r\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = 'origincheck-users-' + new Date().toISOString().slice(0, 10) + '.csv';
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    } catch (e) { window.alert('Export failed: ' + e.message); }
+    finally { setExporting(false); }
+  };
 
   const sendEmail = async () => {
     if (!emailForm.subject.trim() || !emailForm.body.trim()) return;
@@ -2413,7 +2502,7 @@ function Admin({ go }) {
         </div>
 
         <div style={{ display:'flex', borderBottom:`1px solid ${C.border}`, marginBottom:'1.5rem' }}>
-          {[['payments','Recent Payments'],['users','Recent Users'],['affiliates','Affiliates'],['ambassadors','🎖️ Ambassadors'],['email','📧 Email Users']].map(([v,l])=>(
+          {[['payments','Payments'],['users','Users'],['affiliates','Affiliates'],['ambassadors','🎖️ Ambassadors'],['email','📧 Email Users']].map(([v,l])=>(
             <button key={v} onClick={()=>setTab(v)} style={{ padding:'.75rem 1.5rem', border:'none', background:'transparent', fontFamily:"'DM Mono',monospace", fontSize:'.78rem', letterSpacing:'.05em', color:tab===v?C.teal:C.muted, borderBottom:`2px solid ${tab===v?C.gold:'transparent'}`, fontWeight:tab===v?600:400 }}>{l}</button>
           ))}
         </div>
@@ -2421,70 +2510,115 @@ function Admin({ go }) {
         <div style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:4, overflow:'auto' }}>
           {tab==='payments'&&(
             <div>
-              {/* Manual payment fix tool */}
-              <div style={{ padding:'1rem 1rem .5rem', background:'#fffbf0', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap' }}>
+              <div style={{ padding:'1rem 1rem .75rem', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap', borderBottom:`1px solid ${C.border}` }}>
+                {[['success','✅ Successful', payData?.counts?.success],['pending','⏳ Unpaid attempts', payData?.counts?.unpaid],['all','All', payData?.counts?.all]].map(([v,l,n])=>(
+                  <button key={v} onClick={()=>changePayFilter(v)} style={{ padding:'.4rem .9rem', borderRadius:20, border:`1.5px solid ${payFilter===v?C.teal:C.border}`, background:payFilter===v?C.teal:C.white, color:payFilter===v?C.white:C.ink, fontSize:'.8rem', fontWeight:600, cursor:'pointer' }}>
+                    {l}{n!==undefined?` (${n})`:''}
+                  </button>
+                ))}
+                {payFilter!=='success'&&(payData?.counts?.unpaid||0)>0&&(
+                  <button onClick={clearUnpaid} style={{ marginLeft:'auto', padding:'.4rem .9rem', borderRadius:2, border:`1.5px solid ${C.red}`, background:C.white, color:C.red, fontSize:'.78rem', fontWeight:700, cursor:'pointer' }}>🧹 Clear abandoned attempts</button>
+                )}
+              </div>
+              {payNote&&<div style={{ padding:'.6rem 1rem', fontSize:'.82rem', fontWeight:600, color:payNote.startsWith('❌')?C.red:C.green, background:C.cream }}>{payNote}</div>}
+
+              <div style={{ padding:'.75rem 1rem', background:'#fffbf0', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap' }}>
                 <div style={{ fontSize:'.82rem', color:C.ink, fontWeight:600 }}>🔧 Fix stuck payment:</div>
-                <input id="fixRef" placeholder="Paste Paystack reference e.g. oc_abc123..."
+                <input id="fixRef" placeholder="Paste a Paystack reference (or click one in the table)"
                   style={{ flex:1, minWidth:220, background:C.white, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.45rem .75rem', fontSize:'.82rem', outline:'none' }}/>
                 <button onClick={async()=>{
                   const ref = document.getElementById('fixRef').value.trim();
                   if (!ref) return;
                   try {
                     const d = await af('/api/admin/fix-payment', { method:'POST', body:{ reference: ref }});
-                    alert(d.message);
-                    if (d.success) { const s = await af('/api/admin/stats'); setStats(s); }
-                  } catch(e) { alert('Error: ' + e.message); }
+                    window.alert(d.message);
+                    if (d.success) { const st = await af('/api/admin/stats'); setStats(st); loadPayments(); }
+                  } catch(e) { window.alert('Error: ' + e.message); }
                 }} style={{ background:C.teal, color:C.white, border:'none', borderRadius:2, padding:'.45rem 1rem', fontSize:'.82rem', fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
-                  Verify & Activate
+                  Verify &amp; Activate
                 </button>
-                <div style={{ fontSize:'.72rem', color:C.muted }}>Use this if a user paid but their plan was not activated</div>
               </div>
-            <table style={{ width:'100%', borderCollapse:'collapse' }}>
-              <thead><tr style={{ background:C.ink }}>
-                {['User','Email','Plan','Amount','Status','Date'].map(h=><th key={h} style={{ padding:'.75rem 1rem', textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:'.7rem', color:C.gold, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:600, whiteSpace:'nowrap' }}>{h}</th>)}
-              </tr></thead>
-              <tbody>
-                {stats.recentPayments.map((p,i)=>(
-                  <tr key={p.reference} style={{ background:i%2===0?C.white:C.paper, borderBottom:`1px solid ${C.border}` }}>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', fontWeight:600 }}>{p.name}</td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted }}>{p.email}</td>
-                    <td style={{ padding:'.75rem 1rem' }}><span style={{ background:pc(p.plan)+'20', color:pc(p.plan), fontSize:'.72rem', fontWeight:700, padding:'.2rem .6rem', borderRadius:20, textTransform:'uppercase', fontFamily:"'DM Mono',monospace" }}>{p.plan}</span></td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', fontWeight:700, color:C.teal }}>{fmt(p.amount)}</td>
-                    <td style={{ padding:'.75rem 1rem' }}><span style={{ background:p.status==='success'?C.green+'20':C.amber+'20', color:p.status==='success'?C.green:C.amber, fontSize:'.72rem', fontWeight:700, padding:'.2rem .6rem', borderRadius:20 }}>{p.status}</span></td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.78rem', color:C.muted, whiteSpace:'nowrap' }}>{new Date(p.created_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</td>
-                  </tr>
-                ))}
-                {stats.recentPayments.length===0&&<tr><td colSpan={6} style={{ padding:'2rem', textAlign:'center', color:C.muted }}>No payments yet</td></tr>}
-              </tbody>
-            </table>
+
+              <div style={{ overflowX:'auto', opacity:payLoading?.55:1 }}>
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead><tr style={{ background:C.ink }}>
+                    {['User','Email','Plan','Amount','Status','Reference','Date'].map(h=><th key={h} style={{ padding:'.75rem 1rem', textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:'.7rem', color:C.gold, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:600, whiteSpace:'nowrap' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {(payData?.payments||[]).map((p,i)=>{
+                      const col = p.status==='success'?C.green:p.status==='underpaid'?C.red:C.amber;
+                      const label = p.status==='success'?'success':p.status==='underpaid'?'underpaid':'unpaid attempt';
+                      return (
+                        <tr key={p.id} style={{ background:i%2===0?C.white:C.paper, borderBottom:`1px solid ${C.border}` }}>
+                          <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', fontWeight:600 }}>{p.name}</td>
+                          <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted }}>{p.email}</td>
+                          <td style={{ padding:'.75rem 1rem' }}><span style={{ background:pc(p.plan)+'20', color:pc(p.plan), fontSize:'.72rem', fontWeight:700, padding:'.2rem .6rem', borderRadius:20, textTransform:'uppercase', fontFamily:"'DM Mono',monospace" }}>{p.plan}</span></td>
+                          <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', fontWeight:700, color:C.teal }}>{fmt(p.amount)}</td>
+                          <td style={{ padding:'.75rem 1rem' }}><span style={{ background:col+'20', color:col, fontSize:'.72rem', fontWeight:700, padding:'.2rem .6rem', borderRadius:20, whiteSpace:'nowrap' }}>{label}</span></td>
+                          <td style={{ padding:'.75rem 1rem' }}><span title="Click to copy into the fix tool" onClick={()=>{ const el=document.getElementById('fixRef'); if(el) el.value=p.reference; }} style={{ fontFamily:"'DM Mono',monospace", fontSize:'.72rem', color:C.muted, cursor:'pointer' }}>{p.reference}</span></td>
+                          <td style={{ padding:'.75rem 1rem', fontSize:'.78rem', color:C.muted, whiteSpace:'nowrap' }}>{new Date(p.created_at).toLocaleString('en-GB',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+                        </tr>
+                      );
+                    })}
+                    {payData&&payData.payments.length===0&&<tr><td colSpan={7} style={{ padding:'2rem', textAlign:'center', color:C.muted }}>{payFilter==='success'?'No successful payments yet':payFilter==='pending'?'No unpaid attempts — all clean 🎉':'No payments yet'}</td></tr>}
+                    {!payData&&<tr><td colSpan={7} style={{ padding:'2rem', textAlign:'center' }}><Spin size={24}/></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              {payData&&<Pager page={payData.page} pages={payData.pages} total={payData.total} limit={25} onPage={setPayPage}/>}
             </div>
           )}
           {tab==='users'&&(
-            <table style={{ width:'100%', borderCollapse:'collapse' }}>
-              <thead><tr style={{ background:C.ink }}>
-                {['Name','Email','Institution','Plan','Checks','Expires','Joined'].map(h=><th key={h} style={{ padding:'.75rem 1rem', textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:'.7rem', color:C.gold, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:600, whiteSpace:'nowrap' }}>{h}</th>)}
-              </tr></thead>
-              <tbody>
-                {stats.recentUsers.map((u,i)=>(
-                  <tr key={u.id} style={{ background:i%2===0?C.white:C.paper, borderBottom:`1px solid ${C.border}` }}>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', fontWeight:600 }}>{u.name}</td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted }}>{u.email}</td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted }}>{u.institution||'—'}</td>
-                    <td style={{ padding:'.75rem 1rem' }}><span style={{ background:pc(u.plan)+'20', color:pc(u.plan), fontSize:'.72rem', fontWeight:700, padding:'.2rem .6rem', borderRadius:20, textTransform:'uppercase', fontFamily:"'DM Mono',monospace" }}>{u.plan}</span></td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.85rem' }}>{u.checks_used}/{u.checks_limit}</td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.78rem', whiteSpace:'nowrap' }}>
-                      {u.sub_expires ? (
-                        <span style={{ color: new Date(u.sub_expires) < new Date() ? C.red : new Date(u.sub_expires) < new Date(Date.now() + 7*24*60*60*1000) ? C.amber : C.green, fontWeight:600 }}>
-                          {new Date(u.sub_expires) < new Date() ? '❌ ' : new Date(u.sub_expires) < new Date(Date.now() + 7*24*60*60*1000) ? '⚠️ ' : '✅ '}
-                          {new Date(u.sub_expires).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}
-                        </span>
-                      ) : <span style={{ color:C.muted }}>—</span>}
-                    </td>
-                    <td style={{ padding:'.75rem 1rem', fontSize:'.78rem', color:C.muted, whiteSpace:'nowrap' }}>{new Date(u.created_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</td>
-                  </tr>
+            <div>
+              <div style={{ padding:'1rem', display:'flex', gap:'.6rem', flexWrap:'wrap', alignItems:'center', borderBottom:`1px solid ${C.border}` }}>
+                <input value={userQ} onChange={e=>setUserQ(e.target.value)} placeholder="🔍 Search name, email or institution…"
+                  style={{ flex:'1 1 260px', background:C.white, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.55rem .8rem', fontSize:'.85rem', outline:'none' }}/>
+                <select value={userPlan} onChange={e=>{ setUserPlan(e.target.value); setUserPage(1); }} style={{ background:C.white, border:`1.5px solid ${C.border}`, borderRadius:2, padding:'.55rem .6rem', fontSize:'.82rem' }}>
+                  <option value="">All plans</option><option value="free">Free</option><option value="basic">Basic</option><option value="researcher">Pro</option><option value="university">University</option><option value="none">No plan</option>
+                </select>
+                <button onClick={exportUsers} disabled={exporting||!usersData?.total} style={{ padding:'.55rem 1rem', borderRadius:2, border:'none', background:C.teal, color:C.white, fontSize:'.82rem', fontWeight:700, cursor:exporting?'wait':'pointer', whiteSpace:'nowrap', opacity:(exporting||!usersData?.total)?.6:1 }}>
+                  {exporting?'Preparing…':'⬇️ Export CSV'}
+                </button>
+              </div>
+              <div style={{ padding:'.65rem 1rem', display:'flex', gap:'.5rem', flexWrap:'wrap', background:C.cream, borderBottom:`1px solid ${C.border}` }}>
+                {[['','All',usersData?.counts?.all],['active','✅ Active subscribers',usersData?.counts?.active],['expired','❌ Expired',usersData?.counts?.expired],['free','🆓 Free',usersData?.counts?.free],['none','No plan',usersData?.counts?.none]].map(([v,l,n])=>(
+                  <button key={l} onClick={()=>{ setUserStatus(v); setUserPage(1); }} style={{ padding:'.3rem .8rem', borderRadius:20, border:`1.5px solid ${userStatus===v?C.teal:C.border}`, background:userStatus===v?C.teal:C.white, color:userStatus===v?C.white:C.ink, fontSize:'.76rem', fontWeight:600, cursor:'pointer' }}>
+                    {l}{n!==undefined?` (${n})`:''}
+                  </button>
                 ))}
-              </tbody>
-            </table>
+              </div>
+              {usersData?.error&&<div style={{ padding:'.75rem 1rem', color:C.red, fontSize:'.85rem', fontWeight:600 }}>❌ {usersData.error}</div>}
+              <div style={{ overflowX:'auto', opacity:usersLoading?.55:1 }}>
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead><tr style={{ background:C.ink }}>
+                    {['Name','Email','Institution','Plan','Checks','Expires','Joined'].map(h=><th key={h} style={{ padding:'.75rem 1rem', textAlign:'left', fontFamily:"'DM Mono',monospace", fontSize:'.7rem', color:C.gold, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:600, whiteSpace:'nowrap' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {(usersData?.users||[]).map((u,i)=>(
+                      <tr key={u.id} style={{ background:i%2===0?C.white:C.paper, borderBottom:`1px solid ${C.border}` }}>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.85rem', fontWeight:600 }}>{u.name}</td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted }}>{u.email}</td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.82rem', color:C.muted }}>{u.institution||'—'}</td>
+                        <td style={{ padding:'.75rem 1rem' }}><span style={{ background:pc(u.plan)+'20', color:pc(u.plan), fontSize:'.72rem', fontWeight:700, padding:'.2rem .6rem', borderRadius:20, textTransform:'uppercase', fontFamily:"'DM Mono',monospace" }}>{u.plan==='researcher'?'pro':u.plan}</span></td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.85rem' }}>{u.checks_used}/{u.checks_limit}</td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.78rem', whiteSpace:'nowrap' }}>
+                          {u.sub_expires ? (
+                            <span style={{ color: new Date(u.sub_expires) < new Date() ? C.red : new Date(u.sub_expires) < new Date(Date.now() + 7*24*60*60*1000) ? C.amber : C.green, fontWeight:600 }}>
+                              {new Date(u.sub_expires) < new Date() ? '❌ ' : new Date(u.sub_expires) < new Date(Date.now() + 7*24*60*60*1000) ? '⚠️ ' : '✅ '}
+                              {new Date(u.sub_expires).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}
+                            </span>
+                          ) : <span style={{ color:C.muted }}>—</span>}
+                        </td>
+                        <td style={{ padding:'.75rem 1rem', fontSize:'.78rem', color:C.muted, whiteSpace:'nowrap' }}>{new Date(u.created_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</td>
+                      </tr>
+                    ))}
+                    {usersData&&usersData.users.length===0&&!usersData.error&&<tr><td colSpan={7} style={{ padding:'2rem', textAlign:'center', color:C.muted }}>No users match your search.</td></tr>}
+                    {!usersData&&<tr><td colSpan={7} style={{ padding:'2rem', textAlign:'center' }}><Spin size={24}/></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              {usersData&&<Pager page={usersData.page} pages={usersData.pages} total={usersData.total} limit={25} onPage={setUserPage}/>}
+            </div>
           )}
           {tab==='ambassadors'&&(
             <div style={{ padding:'1.5rem' }}>
